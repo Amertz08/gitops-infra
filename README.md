@@ -172,12 +172,17 @@ kubectl -n kube-system get secret \
 
 Run these steps once when setting up a new environment. ArgoCD runs on a dedicated **mgmt cluster** and manages the dev, qa, and prod clusters remotely.
 
+> **HA install**: The mgmt cluster should have at least 3 nodes so Redis HA sentinel pods (3 replicas) and server/repo-server pod anti-affinity rules can spread across nodes. Pods will still schedule on fewer nodes but without true failure isolation.
+
 ```bash
 # 1. On the mgmt cluster — install ArgoCD
 kubectl apply --server-side -k argocd/install/
 
-# 2. Wait for ArgoCD
+# 2. Wait for all ArgoCD HA components
 kubectl -n argocd rollout status deployment/argocd-server
+kubectl -n argocd rollout status deployment/argocd-repo-server
+kubectl -n argocd rollout status deployment/argocd-applicationset-controller
+kubectl -n argocd rollout status statefulset/argocd-application-controller
 
 # 3. Get the initial admin password
 kubectl -n argocd get secret argocd-initial-admin-secret \
