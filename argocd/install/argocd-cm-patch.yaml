@@ -4,7 +4,11 @@ metadata:
   name: argocd-cm
   namespace: argocd
 data:
-  resource.customizations.health.networking.k8s.io/Ingress: |
+  resource.customizations.health.gateway.networking.k8s.io/Gateway: |
+    hs = {}
+    hs.status = "Healthy"
+    return hs
+  resource.customizations.health.gateway.networking.k8s.io/HTTPRoute: |
     hs = {}
     hs.status = "Healthy"
     return hs
