@@ -205,11 +205,17 @@ kubectl apply -f argocd/apps/argocd.yaml
 kubectl apply --server-side \
   -f https://github.com/envoyproxy/gateway/releases/download/v1.2.0/install.yaml
 
-# 8. Register the App of Apps root (auto-registers everything else)
+# 8. (Recommended) Bootstrap cert-manager on mgmt cluster before registering root.
+#    This prevents the ArgoCD self-managing Application from briefly showing degraded
+#    due to the Certificate resource in argocd/install/ referencing cert-manager CRDs
+#    that don't exist yet. Skip this step if you're okay with eventual consistency.
+kubectl apply --server-side -k infrastructure/cert-manager/
+
+# 9. Register the App of Apps root (auto-registers everything else)
 kubectl apply -f argocd/root.yaml
 ```
 
-After step 8, ArgoCD manages everything: it deploys Sealed Secrets and Envoy Gateway to all four clusters automatically via the cluster-generator ApplicationSets, and syncs app workloads to the correct cluster based on their overlay path.
+After step 9, ArgoCD manages everything: it deploys Sealed Secrets, Envoy Gateway, and cert-manager to the appropriate clusters automatically, and syncs app workloads to the correct cluster based on their overlay path.
 
 To keep cluster registrations in Git (so they survive a mgmt cluster rebuild), seal and commit the cluster secrets ArgoCD created:
 
@@ -219,9 +225,14 @@ kubectl get secret -n argocd -l argocd.argoproj.io/secret-type=cluster \
 # Add cluster-secrets-sealed.yaml to argocd/install/kustomization.yaml resources
 ```
 
-## Accessing the ArgoCD UI (local cluster)
+## Accessing the ArgoCD UI
 
-The Gateway API route is configured for `argocd.local` but requires a cloud LoadBalancer to be reachable. On a local cluster, use port-forward instead:
+The Gateway API route is configured for `argocd.local`. Once the LoadBalancer IP is assigned:
+
+- **HTTPS**: `https://argocd.local` (self-signed cert — accept the browser warning)
+- **HTTP**: automatically redirects to HTTPS
+
+On a local cluster without a cloud LoadBalancer, use port-forward instead:
 
 ```bash
 kubectl -n argocd port-forward svc/argocd-server 8080:80
