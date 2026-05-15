@@ -26,6 +26,8 @@ Ask the user for the following with AskUserQuestion:
 - **Container image name** — image name without a tag (e.g. `nginx`, `ghcr.io/org/my-app`). The tag is managed per environment.
 - **Initial image tag** — the tag to use across all three environments to start (e.g. `latest`, `main`, a git SHA like `abc1234`). Teams promote by updating `newTag` in each overlay via PR.
 - **Container port** — the port the container listens on (e.g. `8080`). **Optional** — if not provided, no Service is created and no ports are defined on the container.
+- **GitHub org** — the GitHub org or user that owns the app source repo (e.g. `my-org`). Used for PR preview environments.
+- **GitHub repo** — the app source repo name (e.g. `my-app`). Used for PR preview environments.
 
 Validate: team name and app name must match `^[a-z0-9][a-z0-9-]*$`. If they contain uppercase or spaces, tell the user and ask again.
 
@@ -174,20 +176,67 @@ patches:
       name: <APP>
 ```
 
-### Step 3 — Summarize and offer to commit
+### Step 4 — Create preview ApplicationSet
+
+Always create `argocd/apps/<TEAM>-<APP>-preview.yaml` (no prompt — this is always generated):
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: <TEAM>-<APP>-preview
+  namespace: argocd
+spec:
+  generators:
+    - pullRequest:
+        github:
+          owner: <GITHUB_ORG>
+          repo: <GITHUB_REPO>
+          tokenRef:
+            secretName: github-token
+            key: token
+        requeueAfterSeconds: 180
+  template:
+    metadata:
+      name: '<TEAM>-<APP>-pr-{{number}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/Amertz08/gitops-infra
+        targetRevision: HEAD
+        path: apps/<TEAM>/<APP>/overlays/dev
+        kustomize:
+          images:
+            - '<IMAGE>:{{head_sha}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '<TEAM>-<APP>-pr-{{number}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+```
+
+### Step 5 — Summarize and offer to commit
 
 After writing the files, tell the user:
 - Files created at `apps/<TEAM>/<APP>/`
+- Preview ApplicationSet created at `argocd/apps/<TEAM>-<APP>-preview.yaml`
 - **dev + qa** will auto-sync once pushed (ArgoCD ApplicationSet picks them up within ~3 minutes)
 - **prod** requires a manual sync in the ArgoCD UI after dev/qa validation
-- Namespaces that will be created: `<TEAM>-dev`, `<TEAM>-qa`, `<TEAM>-prod`
+- **PR previews** deploy automatically when a PR is opened in `<GITHUB_ORG>/<GITHUB_REPO>` — the preview namespace `<TEAM>-<APP>-pr-<number>` is created automatically and deleted when the PR is closed
+- Namespaces that will be created: `<TEAM>-dev`, `<TEAM>-qa`, `<TEAM>-prod`, `<TEAM>-<APP>-pr-<number>` (one per open PR)
+- **Prerequisite:** a `github-token` Secret must exist in the `argocd` namespace. See the [PR Preview section in the README](../../README.md) for setup instructions.
 - To deploy a new image version: open a PR updating `newTag` in `overlays/dev/kustomization.yaml`, merge to auto-deploy to dev, then repeat for qa, then prod (prod also requires a manual ArgoCD sync)
 
 Then ask if they want to commit and push the new files now.
 
 If yes, run:
 ```bash
-git add apps/<TEAM>/<APP>/
+git add apps/<TEAM>/<APP>/ argocd/apps/<TEAM>-<APP>-preview.yaml
 git commit -m "Add <TEAM>/<APP> application scaffold"
 git push
 ```

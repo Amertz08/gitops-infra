@@ -1,0 +1,37 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: team-a-example-app-preview
+  namespace: argocd
+spec:
+  generators:
+    - pullRequest:
+        github:
+          owner: Amertz08          # GitHub org/user that owns the app source repo
+          repo: example-app        # App source repo name — update to match your repo
+          tokenRef:
+            secretName: github-token
+            key: token
+        requeueAfterSeconds: 180
+  template:
+    metadata:
+      name: 'team-a-example-app-pr-{{number}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/Amertz08/gitops-infra
+        targetRevision: HEAD
+        path: apps/team-a/example-app/overlays/dev
+        kustomize:
+          images:
+            - 'nginx:{{head_sha}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'team-a-example-app-pr-{{number}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true

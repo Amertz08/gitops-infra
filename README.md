@@ -87,6 +87,57 @@ images:
 3. After validating in dev, open a PR updating `newTag` in `overlays/qa/kustomization.yaml` → merge → ArgoCD auto-deploys to qa
 4. After validating in qa, open a PR updating `newTag` in `overlays/prod/kustomization.yaml` → merge → trigger a manual sync in the ArgoCD UI to deploy to prod
 
+## PR preview environments
+
+Every PR opened in an app's source repo gets its own isolated preview namespace deployed automatically. ArgoCD's ApplicationSet Pull Request generator polls GitHub for open PRs, creates a namespaced Application per PR, and deletes it when the PR is closed.
+
+### How it works
+
+1. Developer opens PR in the app source repo
+2. CI builds and pushes an image tagged with the PR's **head commit SHA**: `ghcr.io/org/my-app:<sha>`
+3. ArgoCD detects the PR (polls every 3 min), creates Application `<team>-<app>-pr-<number>`
+4. Application deploys to namespace `<team>-<app>-pr-<number>` using the dev overlay, with the image tag overridden to `<sha>`
+5. PR is merged or closed → ArgoCD deletes the Application and namespace automatically
+
+### One-time cluster setup — `github-token` Secret
+
+The PR generator authenticates with GitHub using a Personal Access Token stored as a SealedSecret in the `argocd` namespace. Create it once per cluster:
+
+1. Generate a GitHub PAT with **`repo` scope** (private repos) or **`public_repo` scope** (public repos)
+2. Encrypt and commit it:
+
+```bash
+kubectl create secret generic github-token \
+  --dry-run=client \
+  --from-literal=token=<YOUR_GITHUB_PAT> \
+  -n argocd \
+  -o yaml \
+  | kubeseal --format yaml > argocd/install/github-token-sealed.yaml
+```
+
+3. Add `github-token-sealed.yaml` to `argocd/install/kustomization.yaml` under `resources:`
+4. Commit and push — ArgoCD will deploy the SealedSecret and the controller will decrypt it
+
+### App repo CI contract
+
+Your app repo's CI pipeline must build and push an image tagged with the **full head commit SHA** when a PR is opened or updated:
+
+```yaml
+# Example GitHub Actions step
+- name: Build and push PR image
+  run: |
+    docker build -t ghcr.io/org/my-app:${{ github.event.pull_request.head.sha }} .
+    docker push ghcr.io/org/my-app:${{ github.event.pull_request.head.sha }}
+```
+
+The preview ApplicationSet uses `{{head_sha}}` to reference this exact tag.
+
+### Enabling previews for a new app
+
+Run `/new-app` in Claude Code — preview ApplicationSets are generated automatically as part of every scaffold. The ApplicationSet file is created at `argocd/apps/<team>-<app>-preview.yaml` and committed alongside the app manifests.
+
+To add previews manually to an existing app, copy `argocd/apps/team-a-example-app-preview.yaml`, update `github.owner`, `github.repo`, the `path:`, `name:`, `namespace:`, and `images:` fields, and commit.
+
 ## Secrets
 
 Use [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) to store secrets in Git. The controller's public key is in the cluster — never commit the private key.
