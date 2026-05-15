@@ -1,26 +1,31 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: sealed-secrets
+  name: apps-auto-qa
   namespace: argocd
 spec:
   generators:
-    - clusters: {}
+    - git:
+        repoURL: https://github.com/Amertz08/gitops-infra
+        revision: HEAD
+        directories:
+          - path: apps/*/*/overlays/qa
   template:
     metadata:
-      name: 'sealed-secrets-{{name}}'
+      name: '{{path[1]}}-{{path[2]}}-{{path[4]}}'
     spec:
       project: default
       source:
         repoURL: https://github.com/Amertz08/gitops-infra
         targetRevision: HEAD
-        path: infrastructure/sealed-secrets
+        path: '{{path}}'
       destination:
-        name: '{{name}}'
-        namespace: kube-system
+        name: qa-cluster
+        namespace: '{{path[1]}}-{{path[4]}}'
       syncPolicy:
         automated:
           prune: true
           selfHeal: true
         syncOptions:
+          - CreateNamespace=true
           - ServerSideApply=true

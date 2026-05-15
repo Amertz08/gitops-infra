@@ -1,23 +1,27 @@
 apiVersion: argoproj.io/v1alpha1
-kind: Application
+kind: ApplicationSet
 metadata:
   name: envoy-gateway
   namespace: argocd
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
-  project: default
-  source:
-    repoURL: https://github.com/Amertz08/gitops-infra
-    targetRevision: HEAD
-    path: infrastructure/envoy-gateway
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: envoy-gateway-system
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
-      - ServerSideApply=true
+  generators:
+    - clusters: {}
+  template:
+    metadata:
+      name: 'envoy-gateway-{{name}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/Amertz08/gitops-infra
+        targetRevision: HEAD
+        path: infrastructure/envoy-gateway
+      destination:
+        name: '{{name}}'
+        namespace: envoy-gateway-system
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true

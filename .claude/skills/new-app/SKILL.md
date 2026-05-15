@@ -209,7 +209,7 @@ spec:
           images:
             - '<IMAGE>:{{head_sha}}'
       destination:
-        server: https://kubernetes.default.svc
+        name: dev-cluster
         namespace: '<TEAM>-<APP>-pr-{{number}}'
       syncPolicy:
         automated:

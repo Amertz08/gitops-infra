@@ -142,33 +142,38 @@ To add previews manually to an existing app, copy `argocd/apps/team-a-example-ap
 
 Use [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) to store secrets in Git. The controller's public key is in the cluster — never commit the private key.
 
+**Important:** Each cluster has its own Sealed Secrets encryption key. A secret sealed for one cluster cannot be decrypted by another. Seal secrets per environment by running `kubeseal` against the appropriate cluster:
+
 ```bash
-# Encrypt a secret
+# Encrypt a secret for a specific environment cluster
 kubectl create secret generic my-secret \
   --dry-run=client \
   --from-literal=password=... \
   -n <team>-<env> \
   -o yaml \
-  | kubeseal --format yaml > apps/<team>/<app>/overlays/<env>/sealed-secret.yaml
+  | kubeseal --controller-namespace kube-system --format yaml \
+  > apps/<team>/<app>/overlays/<env>/sealed-secret.yaml
 ```
+
+Run this once per environment (dev, qa, prod), each time with your kubeconfig pointed at the respective cluster. Commit all three resulting files.
 
 Commit the `SealedSecret` YAML. ArgoCD will deploy it; the controller decrypts it at runtime.
 
-Back up the controller key — if the cluster is recreated without it, sealed secrets cannot be decrypted:
+Back up the controller key for each cluster — if a cluster is recreated without its key, sealed secrets cannot be decrypted:
 
 ```bash
 kubectl -n kube-system get secret \
   -l sealedsecrets.bitnami.com/sealed-secrets-key=active \
-  -o yaml > sealed-secrets-key-backup.yaml
+  -o yaml > sealed-secrets-key-backup-<cluster>.yaml
 # Store outside the cluster and outside this repo
 ```
 
 ## Bootstrap (initial cluster setup)
 
-These steps are only needed when setting up a brand new cluster. Everything after step 4 is self-managed.
+Run these steps once when setting up a new environment. ArgoCD runs on a dedicated **mgmt cluster** and manages the dev, qa, and prod clusters remotely.
 
 ```bash
-# 1. Install ArgoCD
+# 1. On the mgmt cluster — install ArgoCD
 kubectl apply --server-side -k argocd/install/
 
 # 2. Wait for ArgoCD
@@ -178,18 +183,36 @@ kubectl -n argocd rollout status deployment/argocd-server
 kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath="{.data.password}" | base64 -d && echo
 
-# 4. Register the self-managing Application
+# 4. Log in with the argocd CLI
+argocd login <ARGOCD_URL>
+
+# 5. Register the app clusters (run once per cluster)
+argocd cluster add <DEV_KUBECONFIG_CONTEXT>  --name dev-cluster
+argocd cluster add <QA_KUBECONFIG_CONTEXT>   --name qa-cluster
+argocd cluster add <PROD_KUBECONFIG_CONTEXT> --name prod-cluster
+
+# 6. Register the self-managing Application
 kubectl apply -f argocd/apps/argocd.yaml
 
-# 5. Bootstrap Envoy Gateway
+# 7. Bootstrap Envoy Gateway on mgmt cluster
+#    (ArgoCD will manage it on all clusters after step 8, but the mgmt cluster
+#    needs it running before the root Application can sync the HTTPRoute)
 kubectl apply --server-side \
   -f https://github.com/envoyproxy/gateway/releases/download/v1.2.0/install.yaml
 
-# 6. Register the App of Apps root (auto-registers everything else)
+# 8. Register the App of Apps root (auto-registers everything else)
 kubectl apply -f argocd/root.yaml
 ```
 
-After step 6, all ApplicationSets and Applications in `argocd/apps/` are managed by ArgoCD.
+After step 8, ArgoCD manages everything: it deploys Sealed Secrets and Envoy Gateway to all four clusters automatically via the cluster-generator ApplicationSets, and syncs app workloads to the correct cluster based on their overlay path.
+
+To keep cluster registrations in Git (so they survive a mgmt cluster rebuild), seal and commit the cluster secrets ArgoCD created:
+
+```bash
+kubectl get secret -n argocd -l argocd.argoproj.io/secret-type=cluster \
+  -o yaml | kubeseal --format yaml > argocd/install/cluster-secrets-sealed.yaml
+# Add cluster-secrets-sealed.yaml to argocd/install/kustomization.yaml resources
+```
 
 ## Accessing the ArgoCD UI (local cluster)
 

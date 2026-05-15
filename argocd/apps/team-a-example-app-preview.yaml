@@ -26,7 +26,7 @@ spec:
           images:
             - 'nginx:{{head_sha}}'
       destination:
-        server: https://kubernetes.default.svc
+        name: dev-cluster
         namespace: 'team-a-example-app-pr-{{number}}'
       syncPolicy:
         automated:

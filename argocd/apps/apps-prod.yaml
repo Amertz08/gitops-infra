@@ -20,7 +20,7 @@ spec:
         targetRevision: HEAD
         path: '{{path}}'
       destination:
-        server: https://kubernetes.default.svc
+        name: prod-cluster
         namespace: '{{path[1]}}-{{path[4]}}'
       syncPolicy:
         syncOptions:

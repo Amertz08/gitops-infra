@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: apps-auto
+  name: apps-auto-dev
   namespace: argocd
 spec:
   generators:
@@ -10,7 +10,6 @@ spec:
         revision: HEAD
         directories:
           - path: apps/*/*/overlays/dev
-          - path: apps/*/*/overlays/qa
   template:
     metadata:
       name: '{{path[1]}}-{{path[2]}}-{{path[4]}}'
@@ -21,7 +20,7 @@ spec:
         targetRevision: HEAD
         path: '{{path}}'
       destination:
-        server: https://kubernetes.default.svc
+        name: dev-cluster
         namespace: '{{path[1]}}-{{path[4]}}'
       syncPolicy:
         automated:
