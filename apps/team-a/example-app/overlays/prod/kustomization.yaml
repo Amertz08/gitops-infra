@@ -6,6 +6,10 @@ namespace: team-a-prod
 resources:
   - ../../base
 
+images:
+  - name: nginx
+    newTag: "1.25"
+
 patches:
   - patch: |-
       - op: replace

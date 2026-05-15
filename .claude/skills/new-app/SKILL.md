@@ -23,14 +23,15 @@ Ask the user for the following with AskUserQuestion:
 
 - **Team name** — lowercase, hyphens only (e.g. `payments`, `team-a`). This becomes the directory name under `apps/` and the namespace prefix.
 - **App name** — lowercase, hyphens only (e.g. `api-gateway`, `worker`).
-- **Container image** — full image reference (e.g. `nginx:1.25`, `ghcr.io/org/app:latest`). Default placeholder: `nginx:1.25`.
+- **Container image name** — image name without a tag (e.g. `nginx`, `ghcr.io/org/my-app`). The tag is managed per environment.
+- **Initial image tag** — the tag to use across all three environments to start (e.g. `latest`, `main`, a git SHA like `abc1234`). Teams promote by updating `newTag` in each overlay via PR.
 - **Container port** — the port the container listens on (e.g. `8080`). **Optional** — if not provided, no Service is created and no ports are defined on the container.
 
 Validate: team name and app name must match `^[a-z0-9][a-z0-9-]*$`. If they contain uppercase or spaces, tell the user and ask again.
 
 ### Step 2 — Create files
 
-Create all files under `apps/<TEAM>/<APP>/`. Use the templates below, substituting `<TEAM>`, `<APP>`, `<IMAGE>`, and `<PORT>`.
+Create all files under `apps/<TEAM>/<APP>/`. Use the templates below, substituting `<TEAM>`, `<APP>`, `<IMAGE>` (image name, no tag), `<TAG>`, and `<PORT>`.
 
 #### `apps/<TEAM>/<APP>/base/kustomization.yaml`
 
@@ -54,6 +55,8 @@ resources:
 ```
 
 #### `apps/<TEAM>/<APP>/base/deployment.yaml`
+
+The image here has **no tag** — the tag is set per environment in the overlay `images:` stanza.
 
 If port provided:
 ```yaml
@@ -124,6 +127,10 @@ namespace: <TEAM>-dev
 
 resources:
   - ../../base
+
+images:
+  - name: <IMAGE>
+    newTag: "<TAG>"
 ```
 
 #### `apps/<TEAM>/<APP>/overlays/qa/kustomization.yaml`
@@ -136,6 +143,10 @@ namespace: <TEAM>-qa
 
 resources:
   - ../../base
+
+images:
+  - name: <IMAGE>
+    newTag: "<TAG>"
 ```
 
 #### `apps/<TEAM>/<APP>/overlays/prod/kustomization.yaml`
@@ -148,6 +159,10 @@ namespace: <TEAM>-prod
 
 resources:
   - ../../base
+
+images:
+  - name: <IMAGE>
+    newTag: "<TAG>"
 
 patches:
   - patch: |-
@@ -166,7 +181,7 @@ After writing the files, tell the user:
 - **dev + qa** will auto-sync once pushed (ArgoCD ApplicationSet picks them up within ~3 minutes)
 - **prod** requires a manual sync in the ArgoCD UI after dev/qa validation
 - Namespaces that will be created: `<TEAM>-dev`, `<TEAM>-qa`, `<TEAM>-prod`
-- If the image was left as the placeholder `nginx:1.25`, remind them to update `base/deployment.yaml`
+- To deploy a new image version: open a PR updating `newTag` in `overlays/dev/kustomization.yaml`, merge to auto-deploy to dev, then repeat for qa, then prod (prod also requires a manual ArgoCD sync)
 
 Then ask if they want to commit and push the new files now.
 

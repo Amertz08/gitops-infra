@@ -63,10 +63,29 @@ cp -r apps/team-a/example-app apps/<your-team>/<your-app>
 
 Then update:
 - Namespaces in each overlay (`overlays/*/kustomization.yaml`) from `team-a-*` to `<your-team>-*`
-- The image in `base/deployment.yaml`
+- The image name in `base/deployment.yaml` (no tag — tag goes in overlays)
+- The `images[0].name` and `images[0].newTag` in each overlay
 - Remove `base/service.yaml` and its entry in `base/kustomization.yaml` if your app has no port
 
 Commit and push. ArgoCD will deploy to dev and qa automatically within ~3 minutes.
+
+## Promoting an image
+
+Image tags live in each overlay's `kustomization.yaml` under `images:`, not in `base/deployment.yaml`. This lets environments run independently — dev can have a new build while prod stays on a validated version.
+
+```yaml
+# apps/<team>/<app>/overlays/dev/kustomization.yaml
+images:
+  - name: ghcr.io/org/my-app
+    newTag: abc1234   # ← update this to promote
+```
+
+**Promotion workflow:**
+
+1. Build and push a new image from your app repo (`ghcr.io/org/my-app:abc1234`)
+2. Open a PR updating `newTag` in `overlays/dev/kustomization.yaml` → merge → ArgoCD auto-deploys to dev
+3. After validating in dev, open a PR updating `newTag` in `overlays/qa/kustomization.yaml` → merge → ArgoCD auto-deploys to qa
+4. After validating in qa, open a PR updating `newTag` in `overlays/prod/kustomization.yaml` → merge → trigger a manual sync in the ArgoCD UI to deploy to prod
 
 ## Secrets
 

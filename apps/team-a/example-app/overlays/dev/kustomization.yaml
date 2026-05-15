@@ -5,3 +5,7 @@ namespace: team-a-dev
 
 resources:
   - ../../base
+
+images:
+  - name: nginx
+    newTag: "1.25"
