@@ -3,13 +3,9 @@ package activities
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2"
-	"github.com/pulumi/pulumi/sdk/v3/go/auto"
-	"github.com/pulumi/pulumi/sdk/v3/go/auto/optup"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
-	"go.temporal.io/sdk/activity"
 )
 
 // VpcInput is the top-level input for VpcWorkflow. All sub-activity stack names
@@ -310,43 +306,3 @@ func (a *InfraActivities) CreatePrivateRouteTables(ctx context.Context, input Cr
 	return CreatePrivateRouteTablesOutput{RouteTableIds: extractStringSlice(result.Outputs["routeTableIds"])}, nil
 }
 
-// upStack opens (or upserts) a Pulumi stack, configures it, and runs Up.
-// A background ticker sends a keepalive heartbeat every 30 s so that Temporal
-// does not false-timeout the activity during silent AWS provisioning waits.
-func (a *InfraActivities) upStack(ctx context.Context, stackName string, program pulumi.RunFunc) (auto.UpResult, error) {
-	stack, err := auto.UpsertStackInlineSource(ctx, stackName, a.ProjectName, program)
-	if err != nil {
-		return auto.UpResult{}, err
-	}
-	if err := a.configureStack(ctx, stack); err != nil {
-		return auto.UpResult{}, err
-	}
-	stop := make(chan struct{})
-	go func() {
-		t := time.NewTicker(30 * time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-t.C:
-				activity.RecordHeartbeat(ctx, stackName)
-			case <-stop:
-				return
-			}
-		}
-	}()
-	result, err := stack.Up(ctx, optup.ProgressStreams(&heartbeatWriter{ctx: ctx}))
-	close(stop)
-	return result, err
-}
-
-// envTags builds the base tag map for resources in a given environment.
-func envTags(env string, extra map[string]string) pulumi.StringMap {
-	tags := pulumi.StringMap{
-		"Environment": pulumi.String(env),
-		"ManagedBy":   pulumi.String("Pulumi"),
-	}
-	for k, v := range extra {
-		tags[k] = pulumi.String(v)
-	}
-	return tags
-}
