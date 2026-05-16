@@ -87,25 +87,26 @@ type CreatePrivateSubnetsOutput struct {
 	SubnetIds []string `json:"subnetIds"`
 }
 
-type CreatePublicRouteTableInput struct {
-	StackName       string            `json:"stackName"`
-	Environment     string            `json:"environment"`
-	VpcId           string            `json:"vpcId"`
-	IgwId           string            `json:"igwId"`
-	PublicSubnetIds []string          `json:"publicSubnetIds"`
-	ExtraTags       map[string]string `json:"extraTags,omitempty"`
+// RouteSpec describes a single route entry: exactly one of GatewayId,
+// NatGatewayId, or TransitGatewayId should be set.
+type RouteSpec struct {
+	DestCidr         string `json:"destCidr"`
+	GatewayId        string `json:"gatewayId,omitempty"`
+	NatGatewayId     string `json:"natGatewayId,omitempty"`
+	TransitGatewayId string `json:"transitGatewayId,omitempty"`
 }
 
-type CreatePrivateRouteTablesInput struct {
-	StackName        string            `json:"stackName"`
-	Environment      string            `json:"environment"`
-	VpcId            string            `json:"vpcId"`
-	PrivateSubnetIds []string          `json:"privateSubnetIds"`
-	NatGwIds         []string          `json:"natGwIds"`
-	ExtraTags        map[string]string `json:"extraTags,omitempty"`
+type CreateRouteTableInput struct {
+	StackName   string            `json:"stackName"`
+	Environment string            `json:"environment"`
+	VpcId       string            `json:"vpcId"`
+	Name        string            `json:"name"`
+	SubnetIds   []string          `json:"subnetIds"`
+	Routes      []RouteSpec       `json:"routes"`
+	ExtraTags   map[string]string `json:"extraTags,omitempty"`
 }
-type CreatePrivateRouteTablesOutput struct {
-	RouteTableIds []string `json:"routeTableIds"`
+type CreateRouteTableOutput struct {
+	RouteTableId string `json:"routeTableId"`
 }
 
 // --- activity implementations ---
@@ -239,70 +240,48 @@ func (a *InfraActivities) CreatePrivateSubnets(ctx context.Context, input Create
 	return CreatePrivateSubnetsOutput{SubnetIds: extractStringSlice(result.Outputs["subnetIds"])}, nil
 }
 
-func (a *InfraActivities) CreatePublicRouteTable(ctx context.Context, input CreatePublicRouteTableInput) error {
-	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
+func (a *InfraActivities) CreateRouteTable(ctx context.Context, input CreateRouteTableInput) (CreateRouteTableOutput, error) {
+	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
 		tags := envTags(input.Environment, input.ExtraTags)
-		rt, err := ec2.NewRouteTable(pctx, "public-rt", &ec2.RouteTableArgs{
+		rt, err := ec2.NewRouteTable(pctx, "rt", &ec2.RouteTableArgs{
 			VpcId: pulumi.String(input.VpcId),
-			Tags:  mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(input.Environment + "-public-rt")}),
+			Tags:  mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(input.Name)}),
 		})
 		if err != nil {
 			return err
 		}
-		if _, err = ec2.NewRoute(pctx, "public-igw-route", &ec2.RouteArgs{
-			RouteTableId:         rt.ID(),
-			DestinationCidrBlock: pulumi.String("0.0.0.0/0"),
-			GatewayId:            pulumi.String(input.IgwId),
-		}); err != nil {
-			return err
-		}
-		for i, subnetId := range input.PublicSubnetIds {
-			if _, err = ec2.NewRouteTableAssociation(pctx, fmt.Sprintf("public-rta-%d", i), &ec2.RouteTableAssociationArgs{
-				SubnetId:     pulumi.String(subnetId),
-				RouteTableId: rt.ID(),
-			}); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	return err
-}
-
-func (a *InfraActivities) CreatePrivateRouteTables(ctx context.Context, input CreatePrivateRouteTablesInput) (CreatePrivateRouteTablesOutput, error) {
-	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		tags := envTags(input.Environment, input.ExtraTags)
-		rtIds := make(pulumi.StringArray, len(input.PrivateSubnetIds))
-		for i, subnetId := range input.PrivateSubnetIds {
-			rt, err := ec2.NewRouteTable(pctx, fmt.Sprintf("private-rt-%d", i), &ec2.RouteTableArgs{
-				VpcId: pulumi.String(input.VpcId),
-				Tags:  mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(fmt.Sprintf("%s-private-rt-%d", input.Environment, i))}),
-			})
-			if err != nil {
-				return err
-			}
-			natGwId := input.NatGwIds[i%len(input.NatGwIds)]
-			if _, err = ec2.NewRoute(pctx, fmt.Sprintf("private-nat-route-%d", i), &ec2.RouteArgs{
+		for i, spec := range input.Routes {
+			args := &ec2.RouteArgs{
 				RouteTableId:         rt.ID(),
-				DestinationCidrBlock: pulumi.String("0.0.0.0/0"),
-				NatGatewayId:         pulumi.String(natGwId),
-			}); err != nil {
+				DestinationCidrBlock: pulumi.String(spec.DestCidr),
+			}
+			if spec.GatewayId != "" {
+				args.GatewayId = pulumi.String(spec.GatewayId)
+			}
+			if spec.NatGatewayId != "" {
+				args.NatGatewayId = pulumi.String(spec.NatGatewayId)
+			}
+			if spec.TransitGatewayId != "" {
+				args.TransitGatewayId = pulumi.String(spec.TransitGatewayId)
+			}
+			if _, err = ec2.NewRoute(pctx, fmt.Sprintf("route-%d", i), args); err != nil {
 				return err
 			}
-			if _, err = ec2.NewRouteTableAssociation(pctx, fmt.Sprintf("private-rta-%d", i), &ec2.RouteTableAssociationArgs{
+		}
+		for i, subnetId := range input.SubnetIds {
+			if _, err = ec2.NewRouteTableAssociation(pctx, fmt.Sprintf("rta-%d", i), &ec2.RouteTableAssociationArgs{
 				SubnetId:     pulumi.String(subnetId),
 				RouteTableId: rt.ID(),
 			}); err != nil {
 				return err
 			}
-			rtIds[i] = rt.ID().ToStringOutput()
 		}
-		pctx.Export("routeTableIds", rtIds)
+		pctx.Export("routeTableId", rt.ID())
 		return nil
 	})
 	if err != nil {
-		return CreatePrivateRouteTablesOutput{}, err
+		return CreateRouteTableOutput{}, err
 	}
-	return CreatePrivateRouteTablesOutput{RouteTableIds: extractStringSlice(result.Outputs["routeTableIds"])}, nil
+	return CreateRouteTableOutput{RouteTableId: fmt.Sprintf("%v", result.Outputs["routeTableId"].Value)}, nil
 }
 

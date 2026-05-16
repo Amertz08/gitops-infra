@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/adammertz/gitops-infra/temporal/infra-worker/activities"
@@ -92,30 +93,40 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 		return activities.VpcOutputs{}, err
 	}
 
-	// Step 4: Public and private route tables in parallel.
-	pubRtFuture := workflow.ExecuteActivity(shortCtx, acts.CreatePublicRouteTable, activities.CreatePublicRouteTableInput{
-		StackName:       input.StackName + "-public-rt",
-		Environment:     input.Environment,
-		VpcId:           vpcOut.VpcId,
-		IgwId:           igwOut.IgwId,
-		PublicSubnetIds: pubOut.SubnetIds,
-		ExtraTags:       input.ExtraTags,
-	})
-	privRtFuture := workflow.ExecuteActivity(shortCtx, acts.CreatePrivateRouteTables, activities.CreatePrivateRouteTablesInput{
-		StackName:        input.StackName + "-private-rts",
-		Environment:      input.Environment,
-		VpcId:            vpcOut.VpcId,
-		PrivateSubnetIds: privOut.SubnetIds,
-		NatGwIds:         natOut.NatGwIds,
-		ExtraTags:        input.ExtraTags,
+	// Step 4: Route tables — one per private subnet + one shared public RT, all in parallel.
+	// The workflow owns the routing decisions; CreateRouteTable is a generic primitive.
+	privRtFutures := make([]workflow.Future, len(privOut.SubnetIds))
+	for i, subnetId := range privOut.SubnetIds {
+		privRtFutures[i] = workflow.ExecuteActivity(shortCtx, acts.CreateRouteTable, activities.CreateRouteTableInput{
+			StackName:   fmt.Sprintf("%s-private-rt-%d", input.StackName, i),
+			Environment: input.Environment,
+			VpcId:       vpcOut.VpcId,
+			Name:        fmt.Sprintf("%s-private-rt-%d", input.Environment, i),
+			SubnetIds:   []string{subnetId},
+			Routes:      []activities.RouteSpec{{DestCidr: "0.0.0.0/0", NatGatewayId: natOut.NatGwIds[i%len(natOut.NatGwIds)]}},
+			ExtraTags:   input.ExtraTags,
+		})
+	}
+	pubRtFuture := workflow.ExecuteActivity(shortCtx, acts.CreateRouteTable, activities.CreateRouteTableInput{
+		StackName:   input.StackName + "-public-rt",
+		Environment: input.Environment,
+		VpcId:       vpcOut.VpcId,
+		Name:        input.Environment + "-public-rt",
+		SubnetIds:   pubOut.SubnetIds,
+		Routes:      []activities.RouteSpec{{DestCidr: "0.0.0.0/0", GatewayId: igwOut.IgwId}},
+		ExtraTags:   input.ExtraTags,
 	})
 
 	if err := pubRtFuture.Get(ctx, nil); err != nil {
 		return activities.VpcOutputs{}, err
 	}
-	var privRtOut activities.CreatePrivateRouteTablesOutput
-	if err := privRtFuture.Get(ctx, &privRtOut); err != nil {
-		return activities.VpcOutputs{}, err
+	privRtIds := make([]string, len(privRtFutures))
+	for i, f := range privRtFutures {
+		var out activities.CreateRouteTableOutput
+		if err := f.Get(ctx, &out); err != nil {
+			return activities.VpcOutputs{}, err
+		}
+		privRtIds[i] = out.RouteTableId
 	}
 
 	return activities.VpcOutputs{
@@ -123,6 +134,6 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 		CidrBlock:            input.CidrBlock,
 		PublicSubnetIds:      pubOut.SubnetIds,
 		PrivateSubnetIds:     privOut.SubnetIds,
-		PrivateRouteTableIds: privRtOut.RouteTableIds,
+		PrivateRouteTableIds: privRtIds,
 	}, nil
 }
