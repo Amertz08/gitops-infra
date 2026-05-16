@@ -92,11 +92,29 @@ type CreateRouteTableInput struct {
 	Environment string            `json:"environment"`
 	VpcId       string            `json:"vpcId"`
 	Name        string            `json:"name"`
+	ExtraTags   map[string]string `json:"extraTags,omitempty"`
+}
+type CreateRouteTableOutput struct {
+	RouteTableId string `json:"routeTableId"`
+}
+
+type AssociateSubnetsInput struct {
+	StackName    string   `json:"stackName"`
+	RouteTableId string   `json:"routeTableId"`
+	SubnetIds    []string `json:"subnetIds"`
+}
+
+// RouteTableInput is the top-level input for RouteTableWorkflow.
+type RouteTableInput struct {
+	StackName   string            `json:"stackName"`
+	Environment string            `json:"environment"`
+	VpcId       string            `json:"vpcId"`
+	Name        string            `json:"name"`
 	SubnetIds   []string          `json:"subnetIds"`
 	Routes      []RouteSpec       `json:"routes"`
 	ExtraTags   map[string]string `json:"extraTags,omitempty"`
 }
-type CreateRouteTableOutput struct {
+type RouteTableOutput struct {
 	RouteTableId string `json:"routeTableId"`
 }
 
@@ -213,32 +231,6 @@ func (a *InfraActivities) CreateRouteTable(ctx context.Context, input CreateRout
 		if err != nil {
 			return err
 		}
-		for i, spec := range input.Routes {
-			args := &ec2.RouteArgs{
-				RouteTableId:         rt.ID(),
-				DestinationCidrBlock: pulumi.String(spec.DestCidr),
-			}
-			if spec.GatewayId != "" {
-				args.GatewayId = pulumi.String(spec.GatewayId)
-			}
-			if spec.NatGatewayId != "" {
-				args.NatGatewayId = pulumi.String(spec.NatGatewayId)
-			}
-			if spec.TransitGatewayId != "" {
-				args.TransitGatewayId = pulumi.String(spec.TransitGatewayId)
-			}
-			if _, err = ec2.NewRoute(pctx, fmt.Sprintf("route-%d", i), args); err != nil {
-				return err
-			}
-		}
-		for i, subnetId := range input.SubnetIds {
-			if _, err = ec2.NewRouteTableAssociation(pctx, fmt.Sprintf("rta-%d", i), &ec2.RouteTableAssociationArgs{
-				SubnetId:     pulumi.String(subnetId),
-				RouteTableId: rt.ID(),
-			}); err != nil {
-				return err
-			}
-		}
 		pctx.Export("routeTableId", rt.ID())
 		return nil
 	})
@@ -246,6 +238,21 @@ func (a *InfraActivities) CreateRouteTable(ctx context.Context, input CreateRout
 		return CreateRouteTableOutput{}, err
 	}
 	return CreateRouteTableOutput{RouteTableId: fmt.Sprintf("%v", result.Outputs["routeTableId"].Value)}, nil
+}
+
+func (a *InfraActivities) AssociateSubnets(ctx context.Context, input AssociateSubnetsInput) error {
+	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
+		for i, subnetId := range input.SubnetIds {
+			if _, err := ec2.NewRouteTableAssociation(pctx, fmt.Sprintf("rta-%d", i), &ec2.RouteTableAssociationArgs{
+				SubnetId:     pulumi.String(subnetId),
+				RouteTableId: pulumi.String(input.RouteTableId),
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return err
 }
 
 type AddRoutesInput struct {

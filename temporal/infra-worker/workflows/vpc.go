@@ -15,7 +15,7 @@ import (
 //	Step 1: CreateVpc
 //	Step 2: CreateIgw | CreatePublicSubnets | CreatePrivateSubnets (parallel)
 //	Step 3: CreateNatGateways
-//	Step 4: CreatePublicRouteTable | CreatePrivateRouteTables (parallel)
+//	Step 4: RouteTableWorkflow (public) | RouteTableWorkflow×N (private) (parallel child workflows)
 func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.VpcOutputs, error) {
 	var acts *activities.InfraActivities
 
@@ -97,11 +97,14 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 		return activities.VpcOutputs{}, err
 	}
 
-	// Step 4: Route tables — one per private subnet + one shared public RT, all in parallel.
-	// The workflow owns the routing decisions; CreateRouteTable is a generic primitive.
+	// Step 4: Route tables — one per private subnet + one shared public RT, all in parallel
+	// as child workflows. RouteTableWorkflow owns the create→route→associate sequence.
+	cwo := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
 	privRtFutures := make([]workflow.Future, len(privOut.SubnetIds))
 	for i, subnetId := range privOut.SubnetIds {
-		privRtFutures[i] = workflow.ExecuteActivity(shortCtx, acts.CreateRouteTable, activities.CreateRouteTableInput{
+		privRtFutures[i] = workflow.ExecuteChildWorkflow(cwo, RouteTableWorkflow, activities.RouteTableInput{
 			StackName:   fmt.Sprintf("%s-private-rt-%d", input.StackName, i),
 			Environment: input.Environment,
 			VpcId:       vpcOut.VpcId,
@@ -111,7 +114,7 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 			ExtraTags:   input.ExtraTags,
 		})
 	}
-	pubRtFuture := workflow.ExecuteActivity(shortCtx, acts.CreateRouteTable, activities.CreateRouteTableInput{
+	pubRtFuture := workflow.ExecuteChildWorkflow(cwo, RouteTableWorkflow, activities.RouteTableInput{
 		StackName:   input.StackName + "-public-rt",
 		Environment: input.Environment,
 		VpcId:       vpcOut.VpcId,
@@ -126,7 +129,7 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 	}
 	privRtIds := make([]string, len(privRtFutures))
 	for i, f := range privRtFutures {
-		var out activities.CreateRouteTableOutput
+		var out activities.RouteTableOutput
 		if err := f.Get(ctx, &out); err != nil {
 			return activities.VpcOutputs{}, err
 		}
