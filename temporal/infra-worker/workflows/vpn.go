@@ -31,8 +31,11 @@ func VpnWorkflow(ctx workflow.Context, input activities.VpnInput) (activities.Vp
 	})
 
 	// Step 1: Security Group
-	var sgOut activities.CreateSecurityGroupOutput
-	if err := workflow.ExecuteActivity(shortCtx, acts.CreateSecurityGroup, activities.CreateSecurityGroupInput{
+	cwo := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
+	var sgOut activities.SecurityGroupOutput
+	if err := workflow.ExecuteChildWorkflow(cwo, SecurityGroupWorkflow, activities.SecurityGroupInput{
 		StackName:   input.StackName + "-sg",
 		Environment: input.Environment,
 		VpcId:       input.OpsVpcId,
