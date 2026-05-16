@@ -242,7 +242,7 @@ func (a *InfraActivities) CreateRouteTable(ctx context.Context, input CreateRout
 
 func (a *InfraActivities) AssociateSubnet(ctx context.Context, input AssociateSubnetInput) error {
 	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		_, err := ec2.NewRouteTableAssociation(pctx, "rta", &ec2.RouteTableAssociationArgs{
+		_, err := ec2.NewRouteTableAssociation(pctx, "assoc", &ec2.RouteTableAssociationArgs{
 			SubnetId:     pulumi.String(input.SubnetId),
 			RouteTableId: pulumi.String(input.RouteTableId),
 		})

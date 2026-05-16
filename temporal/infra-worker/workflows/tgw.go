@@ -76,7 +76,7 @@ func TgwWorkflow(ctx workflow.Context, input activities.TgwInput) (activities.Tg
 			}
 			for k, route := range routes {
 				rtFutures = append(rtFutures, workflow.ExecuteActivity(shortCtx, acts.AddRoute, activities.AddRouteInput{
-					StackName:    fmt.Sprintf("%s-routes-vpc%d-rt%d-route%d", input.StackName, i, rtIdx, k),
+					StackName:    fmt.Sprintf("%s-route-vpc%d-rt%d-%d", input.StackName, i, rtIdx, k),
 					RouteTableId: rtId,
 					Route:        route,
 				}))
