@@ -52,8 +52,8 @@ func TgwWorkflow(ctx workflow.Context, input activities.TgwInput) (activities.Tg
 		return activities.TgwOutputs{}, err
 	}
 
-	// Step 3: Cross-VPC routes and VPN return routes — one AddRoutes activity per route
-	// table, all in parallel. The workflow owns which routes go in each table.
+	// Step 3: Cross-VPC routes and VPN return routes — one AddRoute activity per route
+	// per route table, all in parallel. The workflow owns which routes go in each table.
 	var rtFutures []workflow.Future
 	for i, vpc := range allVpcs {
 		for rtIdx, rtId := range vpc.PrivateRouteTableIds {
@@ -74,11 +74,13 @@ func TgwWorkflow(ctx workflow.Context, input activities.TgwInput) (activities.Tg
 					TransitGatewayId: tgwOut.TgwId,
 				})
 			}
-			rtFutures = append(rtFutures, workflow.ExecuteActivity(shortCtx, acts.AddRoutes, activities.AddRoutesInput{
-				StackName:    fmt.Sprintf("%s-routes-vpc%d-rt%d", input.StackName, i, rtIdx),
-				RouteTableId: rtId,
-				Routes:       routes,
-			}))
+			for k, route := range routes {
+				rtFutures = append(rtFutures, workflow.ExecuteActivity(shortCtx, acts.AddRoute, activities.AddRouteInput{
+					StackName:    fmt.Sprintf("%s-routes-vpc%d-rt%d-route%d", input.StackName, i, rtIdx, k),
+					RouteTableId: rtId,
+					Route:        route,
+				}))
+			}
 		}
 	}
 	for _, f := range rtFutures {

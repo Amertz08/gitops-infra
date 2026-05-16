@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/adammertz/gitops-infra/temporal/infra-worker/activities"
@@ -11,7 +12,7 @@ import (
 // RouteTableWorkflow creates a route table, adds routes, and associates subnets:
 //
 //	Step 1: CreateRouteTable
-//	Step 2: AddRoutes | AssociateSubnets (parallel)
+//	Step 2: AddRoute×N | AssociateSubnet×N (all in parallel)
 func RouteTableWorkflow(ctx workflow.Context, input activities.RouteTableInput) (activities.RouteTableOutput, error) {
 	var acts *activities.InfraActivities
 
@@ -32,22 +33,25 @@ func RouteTableWorkflow(ctx workflow.Context, input activities.RouteTableInput) 
 		return activities.RouteTableOutput{}, err
 	}
 
-	routesFuture := workflow.ExecuteActivity(opts, acts.AddRoutes, activities.AddRoutesInput{
-		StackName:    input.StackName + "-routes",
-		RouteTableId: rtOut.RouteTableId,
-		Routes:       input.Routes,
-	})
-	assocFuture := workflow.ExecuteActivity(opts, acts.AssociateSubnets, activities.AssociateSubnetsInput{
-		StackName:    input.StackName + "-assoc",
-		RouteTableId: rtOut.RouteTableId,
-		SubnetIds:    input.SubnetIds,
-	})
-
-	if err := routesFuture.Get(ctx, nil); err != nil {
-		return activities.RouteTableOutput{}, err
+	var futures []workflow.Future
+	for i, route := range input.Routes {
+		futures = append(futures, workflow.ExecuteActivity(opts, acts.AddRoute, activities.AddRouteInput{
+			StackName:    fmt.Sprintf("%s-route-%d", input.StackName, i),
+			RouteTableId: rtOut.RouteTableId,
+			Route:        route,
+		}))
 	}
-	if err := assocFuture.Get(ctx, nil); err != nil {
-		return activities.RouteTableOutput{}, err
+	for i, subnetId := range input.SubnetIds {
+		futures = append(futures, workflow.ExecuteActivity(opts, acts.AssociateSubnet, activities.AssociateSubnetInput{
+			StackName:    fmt.Sprintf("%s-assoc-%d", input.StackName, i),
+			RouteTableId: rtOut.RouteTableId,
+			SubnetId:     subnetId,
+		}))
+	}
+	for _, f := range futures {
+		if err := f.Get(ctx, nil); err != nil {
+			return activities.RouteTableOutput{}, err
+		}
 	}
 
 	return activities.RouteTableOutput{RouteTableId: rtOut.RouteTableId}, nil

@@ -98,10 +98,10 @@ type CreateRouteTableOutput struct {
 	RouteTableId string `json:"routeTableId"`
 }
 
-type AssociateSubnetsInput struct {
-	StackName    string   `json:"stackName"`
-	RouteTableId string   `json:"routeTableId"`
-	SubnetIds    []string `json:"subnetIds"`
+type AssociateSubnetInput struct {
+	StackName    string `json:"stackName"`
+	RouteTableId string `json:"routeTableId"`
+	SubnetId     string `json:"subnetId"`
 }
 
 // RouteTableInput is the top-level input for RouteTableWorkflow.
@@ -240,48 +240,40 @@ func (a *InfraActivities) CreateRouteTable(ctx context.Context, input CreateRout
 	return CreateRouteTableOutput{RouteTableId: fmt.Sprintf("%v", result.Outputs["routeTableId"].Value)}, nil
 }
 
-func (a *InfraActivities) AssociateSubnets(ctx context.Context, input AssociateSubnetsInput) error {
+func (a *InfraActivities) AssociateSubnet(ctx context.Context, input AssociateSubnetInput) error {
 	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		for i, subnetId := range input.SubnetIds {
-			if _, err := ec2.NewRouteTableAssociation(pctx, fmt.Sprintf("rta-%d", i), &ec2.RouteTableAssociationArgs{
-				SubnetId:     pulumi.String(subnetId),
-				RouteTableId: pulumi.String(input.RouteTableId),
-			}); err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err := ec2.NewRouteTableAssociation(pctx, "rta", &ec2.RouteTableAssociationArgs{
+			SubnetId:     pulumi.String(input.SubnetId),
+			RouteTableId: pulumi.String(input.RouteTableId),
+		})
+		return err
 	})
 	return err
 }
 
-type AddRoutesInput struct {
-	StackName    string      `json:"stackName"`
-	RouteTableId string      `json:"routeTableId"`
-	Routes       []RouteSpec `json:"routes"`
+type AddRouteInput struct {
+	StackName    string    `json:"stackName"`
+	RouteTableId string    `json:"routeTableId"`
+	Route        RouteSpec `json:"route"`
 }
 
-func (a *InfraActivities) AddRoutes(ctx context.Context, input AddRoutesInput) error {
+func (a *InfraActivities) AddRoute(ctx context.Context, input AddRouteInput) error {
 	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		for i, spec := range input.Routes {
-			args := &ec2.RouteArgs{
-				RouteTableId:         pulumi.String(input.RouteTableId),
-				DestinationCidrBlock: pulumi.String(spec.DestCidr),
-			}
-			if spec.GatewayId != "" {
-				args.GatewayId = pulumi.String(spec.GatewayId)
-			}
-			if spec.NatGatewayId != "" {
-				args.NatGatewayId = pulumi.String(spec.NatGatewayId)
-			}
-			if spec.TransitGatewayId != "" {
-				args.TransitGatewayId = pulumi.String(spec.TransitGatewayId)
-			}
-			if _, err := ec2.NewRoute(pctx, fmt.Sprintf("route-%d", i), args); err != nil {
-				return err
-			}
+		args := &ec2.RouteArgs{
+			RouteTableId:         pulumi.String(input.RouteTableId),
+			DestinationCidrBlock: pulumi.String(input.Route.DestCidr),
 		}
-		return nil
+		if input.Route.GatewayId != "" {
+			args.GatewayId = pulumi.String(input.Route.GatewayId)
+		}
+		if input.Route.NatGatewayId != "" {
+			args.NatGatewayId = pulumi.String(input.Route.NatGatewayId)
+		}
+		if input.Route.TransitGatewayId != "" {
+			args.TransitGatewayId = pulumi.String(input.Route.TransitGatewayId)
+		}
+		_, err := ec2.NewRoute(pctx, "route", args)
+		return err
 	})
 	return err
 }
