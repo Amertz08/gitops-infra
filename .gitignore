@@ -1,3 +1,6 @@
 .idea/
 *.iml
 .DS_Store
+
+# Pulumi build artifacts
+pulumi/aws-networking/aws-networking

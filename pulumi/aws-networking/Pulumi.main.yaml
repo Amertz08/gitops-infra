@@ -1,0 +1,9 @@
+config:
+  aws:region: us-east-1
+  # Import server cert to ACM first, then set these:
+  # aws acm import-certificate --certificate file://pki/issued/server.crt \
+  #   --private-key file://pki/private/server.key \
+  #   --certificate-chain file://pki/ca.crt
+  # aws acm import-certificate --certificate file://pki/ca.crt  (client CA)
+  aws-networking:serverCertArn: ""
+  aws-networking:clientCaArn: ""

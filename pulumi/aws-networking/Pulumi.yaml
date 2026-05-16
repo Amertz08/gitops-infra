@@ -1,0 +1,6 @@
+name: aws-networking
+description: AWS networking — VPCs, Transit Gateway, Client VPN
+runtime:
+  name: go
+  options:
+    binary: ./aws-networking
