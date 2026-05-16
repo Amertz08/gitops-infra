@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/adammertz/gitops-infra/temporal/infra-worker/activities"
@@ -10,10 +11,10 @@ import (
 
 // VpnWorkflow creates the AWS Client VPN endpoint in the ops VPC:
 //
-//	Step 1: CreateVpnSecurityGroup
-//	Step 2: CreateVpnEndpoint         (needs SG)
-//	Step 3: CreateVpnNetworkAssociation (needs endpoint; blocks auth and routes)
-//	Step 4: CreateVpnAuthorizationRule | CreateVpnRoutes (parallel)
+//	Step 1: CreateSecurityGroup
+//	Step 2: CreateVpnEndpoint              (needs SG)
+//	Step 3: CreateVpnNetworkAssociation    (needs endpoint; blocks auth and routes)
+//	Step 4: CreateVpnAuthorizationRule | CreateVpnRoute×N (parallel)
 func VpnWorkflow(ctx workflow.Context, input activities.VpnInput) (activities.VpnOutputs, error) {
 	var acts *activities.InfraActivities
 
@@ -69,24 +70,26 @@ func VpnWorkflow(ctx workflow.Context, input activities.VpnInput) (activities.Vp
 		return activities.VpnOutputs{}, err
 	}
 
-	// Step 4: Authorization rule and spoke routes in parallel.
-	authFuture := workflow.ExecuteActivity(shortCtx, acts.CreateVpnAuthorizationRule, activities.CreateVpnAuthorizationRuleInput{
-		StackName:      input.StackName + "-auth",
-		EndpointId:     endpointOut.EndpointId,
-		AuthorizedCidr: input.AuthorizedCidr,
-	})
-	routesFuture := workflow.ExecuteActivity(shortCtx, acts.CreateVpnRoutes, activities.CreateVpnRoutesInput{
-		StackName:          input.StackName + "-routes",
-		EndpointId:         endpointOut.EndpointId,
-		OpsPrivateSubnetId: input.OpsPrivateSubnetId,
-		SpokeVpcCidrs:      input.SpokeVpcCidrs,
-	})
-
-	if err := authFuture.Get(ctx, nil); err != nil {
-		return activities.VpnOutputs{}, err
+	// Step 4: Authorization rule and one route per spoke VPC CIDR — all in parallel.
+	futures := []workflow.Future{
+		workflow.ExecuteActivity(shortCtx, acts.CreateVpnAuthorizationRule, activities.CreateVpnAuthorizationRuleInput{
+			StackName:      input.StackName + "-auth",
+			EndpointId:     endpointOut.EndpointId,
+			AuthorizedCidr: input.AuthorizedCidr,
+		}),
 	}
-	if err := routesFuture.Get(ctx, nil); err != nil {
-		return activities.VpnOutputs{}, err
+	for i, cidr := range input.SpokeVpcCidrs {
+		futures = append(futures, workflow.ExecuteActivity(shortCtx, acts.CreateVpnRoute, activities.CreateVpnRouteInput{
+			StackName:          fmt.Sprintf("%s-route-%d", input.StackName, i),
+			EndpointId:         endpointOut.EndpointId,
+			OpsPrivateSubnetId: input.OpsPrivateSubnetId,
+			DestCidr:           cidr,
+		}))
+	}
+	for _, f := range futures {
+		if err := f.Get(ctx, nil); err != nil {
+			return activities.VpnOutputs{}, err
+		}
 	}
 
 	return activities.VpnOutputs{EndpointId: endpointOut.EndpointId}, nil

@@ -54,11 +54,11 @@ type CreateVpnAuthorizationRuleInput struct {
 	AuthorizedCidr string `json:"authorizedCidr"`
 }
 
-type CreateVpnRoutesInput struct {
-	StackName          string   `json:"stackName"` // e.g. "main-vpn-routes"
-	EndpointId         string   `json:"endpointId"`
-	OpsPrivateSubnetId string   `json:"opsPrivateSubnetId"`
-	SpokeVpcCidrs      []string `json:"spokeVpcCidrs"`
+type CreateVpnRouteInput struct {
+	StackName          string `json:"stackName"`
+	EndpointId         string `json:"endpointId"`
+	OpsPrivateSubnetId string `json:"opsPrivateSubnetId"`
+	DestCidr           string `json:"destCidr"`
 }
 
 // --- activity implementations ---
@@ -121,21 +121,16 @@ func (a *InfraActivities) CreateVpnAuthorizationRule(ctx context.Context, input 
 	return err
 }
 
-// CreateVpnRoutes adds explicit Client VPN routes for each spoke VPC CIDR.
+// CreateVpnRoute adds a single Client VPN route for a spoke VPC CIDR.
 // Traffic exits through the ops subnet and is forwarded to the TGW.
-func (a *InfraActivities) CreateVpnRoutes(ctx context.Context, input CreateVpnRoutesInput) error {
+func (a *InfraActivities) CreateVpnRoute(ctx context.Context, input CreateVpnRouteInput) error {
 	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		for i, cidr := range input.SpokeVpcCidrs {
-			_, err := ec2clientvpn.NewRoute(pctx, fmt.Sprintf("vpn-route-%d", i), &ec2clientvpn.RouteArgs{
-				ClientVpnEndpointId:  pulumi.String(input.EndpointId),
-				DestinationCidrBlock: pulumi.String(cidr),
-				TargetVpcSubnetId:    pulumi.String(input.OpsPrivateSubnetId),
-			})
-			if err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err := ec2clientvpn.NewRoute(pctx, "vpn-route", &ec2clientvpn.RouteArgs{
+			ClientVpnEndpointId:  pulumi.String(input.EndpointId),
+			DestinationCidrBlock: pulumi.String(input.DestCidr),
+			TargetVpcSubnetId:    pulumi.String(input.OpsPrivateSubnetId),
+		})
+		return err
 	})
 	return err
 }
