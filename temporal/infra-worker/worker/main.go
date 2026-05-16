@@ -44,6 +44,9 @@ func main() {
 	w.RegisterActivity(acts)
 	w.RegisterWorkflow(workflows.InfraDeployWorkflow)
 	w.RegisterWorkflow(workflows.VpcWorkflow)
+	w.RegisterWorkflow(workflows.NatGatewayWorkflow)
+	w.RegisterWorkflow(workflows.RouteTableWorkflow)
+	w.RegisterWorkflow(workflows.SecurityGroupWorkflow)
 	w.RegisterWorkflow(workflows.TgwWorkflow)
 	w.RegisterWorkflow(workflows.VpnWorkflow)
 
