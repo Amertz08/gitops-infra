@@ -3,6 +3,7 @@ module github.com/adammertz/gitops-infra/temporal/infra-worker
 go 1.25.8
 
 require (
+	github.com/pulumi/pulumi-aws/sdk/v6 v6.83.3
 	github.com/pulumi/pulumi/sdk/v3 v3.239.0
 	go.temporal.io/sdk v1.43.0
 )
