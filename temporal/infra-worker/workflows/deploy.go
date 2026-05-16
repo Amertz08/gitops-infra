@@ -152,12 +152,14 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 	}
 	vpnInput := activities.VpnInput{
 		StackName:          "main-vpn",
+		Environment:        "ops",
 		ServerCertArn:      input.ServerCertArn,
 		ClientCaArn:        input.ClientCaArn,
 		OpsVpcId:           opsVpc.VpcId,
 		OpsPrivateSubnetId: opsVpc.PrivateSubnetIds[0],
 		SpokeVpcCidrs:      []string{vpcByEnv["qa"].CidrBlock, vpcByEnv["prod"].CidrBlock},
 		ClientCidr:         vpnClientCidr,
+		AuthorizedCidr:     "10.0.0.0/8",
 	}
 	var vpnOut activities.VpnOutputs
 	if err := workflow.ExecuteChildWorkflow(cwo, VpnWorkflow, vpnInput).Get(ctx, &vpnOut); err != nil {

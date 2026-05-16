@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2clientvpn"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
@@ -12,12 +11,14 @@ import (
 // VpnInput is the top-level input for VpnWorkflow.
 type VpnInput struct {
 	StackName          string            `json:"stackName"`          // e.g. "main-vpn"
+	Environment        string            `json:"environment"`        // e.g. "ops"
 	ServerCertArn      string            `json:"serverCertArn"`
 	ClientCaArn        string            `json:"clientCaArn"`
 	OpsVpcId           string            `json:"opsVpcId"`
 	OpsPrivateSubnetId string            `json:"opsPrivateSubnetId"` // subnet for endpoint association
 	SpokeVpcCidrs      []string          `json:"spokeVpcCidrs"`
-	ClientCidr         string            `json:"clientCidr"` // e.g. "172.16.0.0/22"
+	ClientCidr         string            `json:"clientCidr"`         // e.g. "172.16.0.0/22"
+	AuthorizedCidr     string            `json:"authorizedCidr"`     // e.g. "10.0.0.0/8"
 	ExtraTags          map[string]string `json:"extraTags,omitempty"`
 }
 
@@ -27,17 +28,9 @@ type VpnOutputs struct {
 
 // --- per-resource activity types ---
 
-type CreateVpnSecurityGroupInput struct {
-	StackName string            `json:"stackName"` // e.g. "main-vpn-sg"
-	OpsVpcId  string            `json:"opsVpcId"`
-	ExtraTags map[string]string `json:"extraTags,omitempty"`
-}
-type CreateVpnSecurityGroupOutput struct {
-	SgId string `json:"sgId"`
-}
-
 type CreateVpnEndpointInput struct {
 	StackName     string            `json:"stackName"` // e.g. "main-vpn-endpoint"
+	Environment   string            `json:"environment"`
 	ServerCertArn string            `json:"serverCertArn"`
 	ClientCaArn   string            `json:"clientCaArn"`
 	ClientCidr    string            `json:"clientCidr"`
@@ -50,65 +43,29 @@ type CreateVpnEndpointOutput struct {
 }
 
 type CreateVpnNetworkAssociationInput struct {
-	StackName          string            `json:"stackName"` // e.g. "main-vpn-assoc"
-	EndpointId         string            `json:"endpointId"`
-	OpsPrivateSubnetId string            `json:"opsPrivateSubnetId"`
-	ExtraTags          map[string]string `json:"extraTags,omitempty"`
+	StackName          string `json:"stackName"` // e.g. "main-vpn-assoc"
+	EndpointId         string `json:"endpointId"`
+	OpsPrivateSubnetId string `json:"opsPrivateSubnetId"`
 }
 
 type CreateVpnAuthorizationRuleInput struct {
-	StackName  string            `json:"stackName"` // e.g. "main-vpn-auth"
-	EndpointId string            `json:"endpointId"`
-	ExtraTags  map[string]string `json:"extraTags,omitempty"`
+	StackName      string `json:"stackName"` // e.g. "main-vpn-auth"
+	EndpointId     string `json:"endpointId"`
+	AuthorizedCidr string `json:"authorizedCidr"`
 }
 
 type CreateVpnRoutesInput struct {
-	StackName          string            `json:"stackName"` // e.g. "main-vpn-routes"
-	EndpointId         string            `json:"endpointId"`
-	OpsPrivateSubnetId string            `json:"opsPrivateSubnetId"`
-	SpokeVpcCidrs      []string          `json:"spokeVpcCidrs"`
-	ExtraTags          map[string]string `json:"extraTags,omitempty"`
+	StackName          string   `json:"stackName"` // e.g. "main-vpn-routes"
+	EndpointId         string   `json:"endpointId"`
+	OpsPrivateSubnetId string   `json:"opsPrivateSubnetId"`
+	SpokeVpcCidrs      []string `json:"spokeVpcCidrs"`
 }
 
 // --- activity implementations ---
 
-func (a *InfraActivities) CreateVpnSecurityGroup(ctx context.Context, input CreateVpnSecurityGroupInput) (CreateVpnSecurityGroupOutput, error) {
-	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		tags := pulumi.StringMap{"ManagedBy": pulumi.String("Pulumi")}
-		for k, v := range input.ExtraTags {
-			tags[k] = pulumi.String(v)
-		}
-		sg, err := ec2.NewSecurityGroup(pctx, "vpn-sg", &ec2.SecurityGroupArgs{
-			VpcId:       pulumi.String(input.OpsVpcId),
-			Description: pulumi.String("Client VPN endpoint"),
-			Egress: ec2.SecurityGroupEgressArray{
-				&ec2.SecurityGroupEgressArgs{
-					Protocol:   pulumi.String("-1"),
-					FromPort:   pulumi.Int(0),
-					ToPort:     pulumi.Int(0),
-					CidrBlocks: pulumi.StringArray{pulumi.String("0.0.0.0/0")},
-				},
-			},
-			Tags: mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(input.StackName)}),
-		})
-		if err != nil {
-			return err
-		}
-		pctx.Export("sgId", sg.ID())
-		return nil
-	})
-	if err != nil {
-		return CreateVpnSecurityGroupOutput{}, err
-	}
-	return CreateVpnSecurityGroupOutput{SgId: fmt.Sprintf("%v", result.Outputs["sgId"].Value)}, nil
-}
-
 func (a *InfraActivities) CreateVpnEndpoint(ctx context.Context, input CreateVpnEndpointInput) (CreateVpnEndpointOutput, error) {
 	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		tags := pulumi.StringMap{"ManagedBy": pulumi.String("Pulumi")}
-		for k, v := range input.ExtraTags {
-			tags[k] = pulumi.String(v)
-		}
+		tags := envTags(input.Environment, input.ExtraTags)
 		endpoint, err := ec2clientvpn.NewEndpoint(pctx, "vpn-endpoint", &ec2clientvpn.EndpointArgs{
 			ServerCertificateArn: pulumi.String(input.ServerCertArn),
 			ClientCidrBlock:      pulumi.String(input.ClientCidr),
@@ -151,12 +108,12 @@ func (a *InfraActivities) CreateVpnNetworkAssociation(ctx context.Context, input
 	return err
 }
 
-// CreateVpnAuthorizationRule allows all VPN clients to reach the full 10.0.0.0/8 range.
+// CreateVpnAuthorizationRule allows all VPN clients to reach the specified CIDR.
 func (a *InfraActivities) CreateVpnAuthorizationRule(ctx context.Context, input CreateVpnAuthorizationRuleInput) error {
 	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
 		_, err := ec2clientvpn.NewAuthorizationRule(pctx, "vpn-auth-all", &ec2clientvpn.AuthorizationRuleArgs{
 			ClientVpnEndpointId: pulumi.String(input.EndpointId),
-			TargetNetworkCidr:   pulumi.String("10.0.0.0/8"),
+			TargetNetworkCidr:   pulumi.String(input.AuthorizedCidr),
 			AuthorizeAllGroups:  pulumi.Bool(true),
 		})
 		return err

@@ -30,10 +30,16 @@ func VpnWorkflow(ctx workflow.Context, input activities.VpnInput) (activities.Vp
 	})
 
 	// Step 1: Security Group
-	var sgOut activities.CreateVpnSecurityGroupOutput
-	if err := workflow.ExecuteActivity(shortCtx, acts.CreateVpnSecurityGroup, activities.CreateVpnSecurityGroupInput{
-		StackName: input.StackName + "-sg",
-		OpsVpcId:  input.OpsVpcId,
+	var sgOut activities.CreateSecurityGroupOutput
+	if err := workflow.ExecuteActivity(shortCtx, acts.CreateSecurityGroup, activities.CreateSecurityGroupInput{
+		StackName:   input.StackName + "-sg",
+		Environment: input.Environment,
+		VpcId:       input.OpsVpcId,
+		Name:        input.StackName + "-sg",
+		Description: "Client VPN endpoint",
+		EgressRules: []activities.SecurityGroupRule{
+			{Protocol: "-1", FromPort: 0, ToPort: 0, CidrBlocks: []string{"0.0.0.0/0"}},
+		},
 		ExtraTags: input.ExtraTags,
 	}).Get(ctx, &sgOut); err != nil {
 		return activities.VpnOutputs{}, err
@@ -43,6 +49,7 @@ func VpnWorkflow(ctx workflow.Context, input activities.VpnInput) (activities.Vp
 	var endpointOut activities.CreateVpnEndpointOutput
 	if err := workflow.ExecuteActivity(longCtx, acts.CreateVpnEndpoint, activities.CreateVpnEndpointInput{
 		StackName:     input.StackName + "-endpoint",
+		Environment:   input.Environment,
 		ServerCertArn: input.ServerCertArn,
 		ClientCaArn:   input.ClientCaArn,
 		ClientCidr:    input.ClientCidr,
@@ -58,23 +65,21 @@ func VpnWorkflow(ctx workflow.Context, input activities.VpnInput) (activities.Vp
 		StackName:          input.StackName + "-assoc",
 		EndpointId:         endpointOut.EndpointId,
 		OpsPrivateSubnetId: input.OpsPrivateSubnetId,
-		ExtraTags:          input.ExtraTags,
 	}).Get(ctx, nil); err != nil {
 		return activities.VpnOutputs{}, err
 	}
 
 	// Step 4: Authorization rule and spoke routes in parallel.
 	authFuture := workflow.ExecuteActivity(shortCtx, acts.CreateVpnAuthorizationRule, activities.CreateVpnAuthorizationRuleInput{
-		StackName:  input.StackName + "-auth",
-		EndpointId: endpointOut.EndpointId,
-		ExtraTags:  input.ExtraTags,
+		StackName:      input.StackName + "-auth",
+		EndpointId:     endpointOut.EndpointId,
+		AuthorizedCidr: input.AuthorizedCidr,
 	})
 	routesFuture := workflow.ExecuteActivity(shortCtx, acts.CreateVpnRoutes, activities.CreateVpnRoutesInput{
 		StackName:          input.StackName + "-routes",
 		EndpointId:         endpointOut.EndpointId,
 		OpsPrivateSubnetId: input.OpsPrivateSubnetId,
 		SpokeVpcCidrs:      input.SpokeVpcCidrs,
-		ExtraTags:          input.ExtraTags,
 	})
 
 	if err := authFuture.Get(ctx, nil); err != nil {
