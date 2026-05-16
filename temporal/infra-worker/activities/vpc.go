@@ -66,15 +66,35 @@ type CreateSubnetsOutput struct {
 	SubnetIds []string `json:"subnetIds"`
 }
 
-type CreateNatGatewaysInput struct {
-	StackName       string            `json:"stackName"`
-	Environment     string            `json:"environment"`
-	PublicSubnetIds []string          `json:"publicSubnetIds"`
-	NatPerAz        bool              `json:"natPerAz"`
-	ExtraTags       map[string]string `json:"extraTags,omitempty"`
+type CreateEipInput struct {
+	StackName   string            `json:"stackName"`
+	Environment string            `json:"environment"`
+	ExtraTags   map[string]string `json:"extraTags,omitempty"`
 }
-type CreateNatGatewaysOutput struct {
-	NatGwIds []string `json:"natGwIds"`
+type CreateEipOutput struct {
+	EipId string `json:"eipId"`
+}
+
+type CreateNatGatewayInput struct {
+	StackName   string            `json:"stackName"`
+	Environment string            `json:"environment"`
+	SubnetId    string            `json:"subnetId"`
+	EipId       string            `json:"eipId"`
+	ExtraTags   map[string]string `json:"extraTags,omitempty"`
+}
+type CreateNatGatewayOutput struct {
+	NatGwId string `json:"natGwId"`
+}
+
+// NatGatewayInput is the top-level input for NatGatewayWorkflow.
+type NatGatewayInput struct {
+	StackName   string            `json:"stackName"`
+	Environment string            `json:"environment"`
+	SubnetId    string            `json:"subnetId"`
+	ExtraTags   map[string]string `json:"extraTags,omitempty"`
+}
+type NatGatewayOutput struct {
+	NatGwId string `json:"natGwId"`
 }
 
 
@@ -186,38 +206,43 @@ func (a *InfraActivities) CreateSubnets(ctx context.Context, input CreateSubnets
 	return CreateSubnetsOutput{SubnetIds: extractStringSlice(result.Outputs["subnetIds"])}, nil
 }
 
-func (a *InfraActivities) CreateNatGateways(ctx context.Context, input CreateNatGatewaysInput) (CreateNatGatewaysOutput, error) {
+func (a *InfraActivities) CreateEip(ctx context.Context, input CreateEipInput) (CreateEipOutput, error) {
 	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
 		tags := envTags(input.Environment, input.ExtraTags)
-		var ids pulumi.StringArray
-		for i, subnetId := range input.PublicSubnetIds {
-			if !input.NatPerAz && i > 0 {
-				break
-			}
-			eip, err := ec2.NewEip(pctx, fmt.Sprintf("nat-eip-%d", i), &ec2.EipArgs{
-				Domain: pulumi.String("vpc"),
-				Tags:   mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(fmt.Sprintf("%s-nat-eip-%d", input.Environment, i))}),
-			})
-			if err != nil {
-				return err
-			}
-			nat, err := ec2.NewNatGateway(pctx, fmt.Sprintf("nat-%d", i), &ec2.NatGatewayArgs{
-				SubnetId:     pulumi.String(subnetId),
-				AllocationId: eip.ID(),
-				Tags:         mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(fmt.Sprintf("%s-nat-%d", input.Environment, i))}),
-			})
-			if err != nil {
-				return err
-			}
-			ids = append(ids, nat.ID().ToStringOutput())
+		eip, err := ec2.NewEip(pctx, "eip", &ec2.EipArgs{
+			Domain: pulumi.String("vpc"),
+			Tags:   mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(input.StackName)}),
+		})
+		if err != nil {
+			return err
 		}
-		pctx.Export("natGwIds", ids)
+		pctx.Export("eipId", eip.ID())
 		return nil
 	})
 	if err != nil {
-		return CreateNatGatewaysOutput{}, err
+		return CreateEipOutput{}, err
 	}
-	return CreateNatGatewaysOutput{NatGwIds: extractStringSlice(result.Outputs["natGwIds"])}, nil
+	return CreateEipOutput{EipId: fmt.Sprintf("%v", result.Outputs["eipId"].Value)}, nil
+}
+
+func (a *InfraActivities) CreateNatGateway(ctx context.Context, input CreateNatGatewayInput) (CreateNatGatewayOutput, error) {
+	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
+		tags := envTags(input.Environment, input.ExtraTags)
+		nat, err := ec2.NewNatGateway(pctx, "nat", &ec2.NatGatewayArgs{
+			SubnetId:     pulumi.String(input.SubnetId),
+			AllocationId: pulumi.String(input.EipId),
+			Tags:         mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(input.StackName)}),
+		})
+		if err != nil {
+			return err
+		}
+		pctx.Export("natGwId", nat.ID())
+		return nil
+	})
+	if err != nil {
+		return CreateNatGatewayOutput{}, err
+	}
+	return CreateNatGatewayOutput{NatGwId: fmt.Sprintf("%v", result.Outputs["natGwId"].Value)}, nil
 }
 
 

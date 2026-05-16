@@ -14,7 +14,7 @@ import (
 //
 //	Step 1: CreateVpc
 //	Step 2: CreateIgw | CreatePublicSubnets | CreatePrivateSubnets (parallel)
-//	Step 3: CreateNatGateways
+//	Step 3: NatGatewayWorkflow×N (parallel child workflows; respects NatPerAz)
 //	Step 4: RouteTableWorkflow (public) | RouteTableWorkflow×N (private) (parallel child workflows)
 func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.VpcOutputs, error) {
 	var acts *activities.InfraActivities
@@ -24,11 +24,8 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 		HeartbeatTimeout:    2 * time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	})
-	// NAT Gateway provisioning can take ~5 min in AWS; use a longer close timeout.
-	longCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 20 * time.Minute,
-		HeartbeatTimeout:    2 * time.Minute,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	cwo := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 2},
 	})
 
 	// Step 1: VPC
@@ -85,23 +82,31 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 	}
 
 	// Step 3: NAT Gateways — IGW and public subnets must exist first; sequencing is
-	// enforced by the .Get() calls above, not by passing the IGW ID explicitly.
-	var natOut activities.CreateNatGatewaysOutput
-	if err := workflow.ExecuteActivity(longCtx, acts.CreateNatGateways, activities.CreateNatGatewaysInput{
-		StackName:       input.StackName + "-nat",
-		Environment:     input.Environment,
-		PublicSubnetIds: pubOut.SubnetIds,
-		NatPerAz:        input.NatPerAz,
-		ExtraTags:       input.ExtraTags,
-	}).Get(ctx, &natOut); err != nil {
-		return activities.VpcOutputs{}, err
+	// enforced by the .Get() calls above. NatPerAz controls how many are provisioned.
+	subnetsForNat := pubOut.SubnetIds
+	if !input.NatPerAz {
+		subnetsForNat = pubOut.SubnetIds[:1]
+	}
+	natFutures := make([]workflow.Future, len(subnetsForNat))
+	for i, subnetId := range subnetsForNat {
+		natFutures[i] = workflow.ExecuteChildWorkflow(cwo, NatGatewayWorkflow, activities.NatGatewayInput{
+			StackName:   fmt.Sprintf("%s-nat-%d", input.StackName, i),
+			Environment: input.Environment,
+			SubnetId:    subnetId,
+			ExtraTags:   input.ExtraTags,
+		})
+	}
+	natGwIds := make([]string, len(natFutures))
+	for i, f := range natFutures {
+		var out activities.NatGatewayOutput
+		if err := f.Get(ctx, &out); err != nil {
+			return activities.VpcOutputs{}, err
+		}
+		natGwIds[i] = out.NatGwId
 	}
 
 	// Step 4: Route tables — one per private subnet + one shared public RT, all in parallel
 	// as child workflows. RouteTableWorkflow owns the create→route→associate sequence.
-	cwo := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 2},
-	})
 	privRtFutures := make([]workflow.Future, len(privOut.SubnetIds))
 	for i, subnetId := range privOut.SubnetIds {
 		privRtFutures[i] = workflow.ExecuteChildWorkflow(cwo, RouteTableWorkflow, activities.RouteTableInput{
@@ -110,7 +115,7 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 			VpcId:       vpcOut.VpcId,
 			Name:        fmt.Sprintf("%s-private-rt-%d", input.Environment, i),
 			SubnetIds:   []string{subnetId},
-			Routes:      []activities.RouteSpec{{DestCidr: "0.0.0.0/0", NatGatewayId: natOut.NatGwIds[i%len(natOut.NatGwIds)]}},
+			Routes:      []activities.RouteSpec{{DestCidr: "0.0.0.0/0", NatGatewayId: natGwIds[i%len(natGwIds)]}},
 			ExtraTags:   input.ExtraTags,
 		})
 	}
