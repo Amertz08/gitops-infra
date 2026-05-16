@@ -121,6 +121,7 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 	// Transit Gateway — sequential after all VPCs.
 	status.Phase = "tgw"
 	tgwInput := activities.TgwInput{
+		StackName:     "main-tgw",
 		HubVpc:        vpcByEnv["ops"],
 		SpokeVpcs:     []activities.VpcOutputs{vpcByEnv["qa"], vpcByEnv["prod"]},
 		VpnClientCidr: "172.16.0.0/22",
@@ -140,7 +141,7 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 		ClientCaArn:        input.ClientCaArn,
 		OpsVpcId:           opsVpc.VpcId,
 		OpsPrivateSubnetId: opsVpc.PrivateSubnetIds[0],
-		SpokeVpcCidrs:      []string{"10.1.0.0/16", "10.2.0.0/16"},
+		SpokeVpcCidrs:      []string{vpcByEnv["qa"].CidrBlock, vpcByEnv["prod"].CidrBlock},
 		ClientCidr:         "172.16.0.0/22",
 	}
 	var vpnOut activities.VpnOutputs

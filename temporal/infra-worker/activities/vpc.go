@@ -26,6 +26,7 @@ type VpcInput struct {
 // VpcOutputs is returned by VpcWorkflow and consumed by TgwWorkflow / VpnWorkflow.
 type VpcOutputs struct {
 	VpcId                string   `json:"vpcId"`
+	CidrBlock            string   `json:"cidrBlock"`
 	PrivateSubnetIds     []string `json:"privateSubnetIds"`
 	PublicSubnetIds      []string `json:"publicSubnetIds"`
 	PrivateRouteTableIds []string `json:"privateRouteTableIds"`

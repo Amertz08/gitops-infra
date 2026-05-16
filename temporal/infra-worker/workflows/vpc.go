@@ -113,6 +113,7 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 
 	return activities.VpcOutputs{
 		VpcId:                vpcOut.VpcId,
+		CidrBlock:            input.CidrBlock,
 		PublicSubnetIds:      pubOut.SubnetIds,
 		PrivateSubnetIds:     privOut.SubnetIds,
 		PrivateRouteTableIds: privRtOut.RouteTableIds,

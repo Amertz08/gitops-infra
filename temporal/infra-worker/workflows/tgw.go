@@ -8,29 +8,51 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// TgwWorkflow runs pulumi preview then pulumi up for the Transit Gateway stack.
-// All three VPC stacks must be complete before calling this workflow.
+// TgwWorkflow connects all VPCs via a Transit Gateway:
+//
+//	Step 1: CreateTransitGateway
+//	Step 2: CreateVpcAttachments  (needs TGW)
+//	Step 3: AddTgwRoutes          (needs attachments established)
 func TgwWorkflow(ctx workflow.Context, input activities.TgwInput) (activities.TgwOutputs, error) {
 	var acts *activities.InfraActivities
 
-	previewCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
-		HeartbeatTimeout:    2 * time.Minute,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
-	})
-	upCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Minute,
+	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 15 * time.Minute,
 		HeartbeatTimeout:    2 * time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	})
 
-	if err := workflow.ExecuteActivity(previewCtx, acts.PreviewTgw, input).Get(previewCtx, nil); err != nil {
+	// Step 1: Transit Gateway
+	var tgwOut activities.CreateTransitGatewayOutput
+	if err := workflow.ExecuteActivity(actCtx, acts.CreateTransitGateway, activities.CreateTransitGatewayInput{
+		StackName: input.StackName,
+		ExtraTags: input.ExtraTags,
+	}).Get(ctx, &tgwOut); err != nil {
 		return activities.TgwOutputs{}, err
 	}
 
-	var result activities.TgwOutputs
-	if err := workflow.ExecuteActivity(upCtx, acts.UpTgw, input).Get(upCtx, &result); err != nil {
+	allVpcs := append([]activities.VpcOutputs{input.HubVpc}, input.SpokeVpcs...)
+
+	// Step 2: Attach all VPCs — must complete before routes are programmed.
+	if err := workflow.ExecuteActivity(actCtx, acts.CreateVpcAttachments, activities.CreateVpcAttachmentsInput{
+		StackName: input.StackName + "-attachments",
+		TgwId:     tgwOut.TgwId,
+		Vpcs:      allVpcs,
+		ExtraTags: input.ExtraTags,
+	}).Get(ctx, nil); err != nil {
 		return activities.TgwOutputs{}, err
 	}
-	return result, nil
+
+	// Step 3: Cross-VPC routes and VPN return routes in private route tables.
+	if err := workflow.ExecuteActivity(actCtx, acts.AddTgwRoutes, activities.AddTgwRoutesInput{
+		StackName:     input.StackName + "-routes",
+		TgwId:         tgwOut.TgwId,
+		Vpcs:          allVpcs,
+		VpnClientCidr: input.VpnClientCidr,
+		ExtraTags:     input.ExtraTags,
+	}).Get(ctx, nil); err != nil {
+		return activities.TgwOutputs{}, err
+	}
+
+	return activities.TgwOutputs{TgwId: tgwOut.TgwId}, nil
 }
