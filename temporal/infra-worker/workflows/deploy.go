@@ -60,9 +60,30 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 	}
 
 	vpcConfigs := []activities.VpcInput{
-		{Environment: "ops", CidrBlock: "10.0.0.0/16", Azs: azs},
-		{Environment: "qa", CidrBlock: "10.1.0.0/16", Azs: azs},
-		{Environment: "prod", CidrBlock: "10.2.0.0/16", Azs: azs},
+		{
+			StackName:          "ops-vpc",
+			Environment:        "ops",
+			CidrBlock:          "10.0.0.0/16",
+			PublicSubnetCidrs:  []string{"10.0.128.0/24"},
+			PrivateSubnetCidrs: []string{"10.0.0.0/20", "10.0.16.0/20", "10.0.32.0/20"},
+			Azs:                azs,
+		},
+		{
+			StackName:          "qa-vpc",
+			Environment:        "qa",
+			CidrBlock:          "10.1.0.0/16",
+			PublicSubnetCidrs:  []string{"10.1.128.0/24"},
+			PrivateSubnetCidrs: []string{"10.1.0.0/20", "10.1.16.0/20", "10.1.32.0/20"},
+			Azs:                azs,
+		},
+		{
+			StackName:          "prod-vpc",
+			Environment:        "prod",
+			CidrBlock:          "10.2.0.0/16",
+			PublicSubnetCidrs:  []string{"10.2.128.0/24"},
+			PrivateSubnetCidrs: []string{"10.2.0.0/20", "10.2.16.0/20", "10.2.32.0/20"},
+			Azs:                azs,
+		},
 	}
 
 	// Fan-out: run all three VPC child workflows concurrently.
