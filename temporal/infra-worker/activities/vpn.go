@@ -6,70 +6,79 @@ import (
 
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2clientvpn"
-	"github.com/pulumi/pulumi/sdk/v3/go/auto"
-	"github.com/pulumi/pulumi/sdk/v3/go/auto/optpreview"
-	"github.com/pulumi/pulumi/sdk/v3/go/auto/optup"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
 
+// VpnInput is the top-level input for VpnWorkflow.
 type VpnInput struct {
-	ServerCertArn      string   `json:"serverCertArn"`
-	ClientCaArn        string   `json:"clientCaArn"`
-	OpsVpcId           string   `json:"opsVpcId"`
-	OpsPrivateSubnetId string   `json:"opsPrivateSubnetId"` // first private subnet for association
-	SpokeVpcCidrs      []string `json:"spokeVpcCidrs"`      // ["10.1.0.0/16", "10.2.0.0/16"]
-	ClientCidr         string   `json:"clientCidr"`         // "172.16.0.0/22"
+	StackName          string            `json:"stackName"`          // e.g. "main-vpn"
+	ServerCertArn      string            `json:"serverCertArn"`
+	ClientCaArn        string            `json:"clientCaArn"`
+	OpsVpcId           string            `json:"opsVpcId"`
+	OpsPrivateSubnetId string            `json:"opsPrivateSubnetId"` // subnet for endpoint association
+	SpokeVpcCidrs      []string          `json:"spokeVpcCidrs"`
+	ClientCidr         string            `json:"clientCidr"` // e.g. "172.16.0.0/22"
+	ExtraTags          map[string]string `json:"extraTags,omitempty"`
 }
 
 type VpnOutputs struct {
 	EndpointId string `json:"endpointId"`
 }
 
-func (a *InfraActivities) PreviewVpn(ctx context.Context, input VpnInput) error {
-	stack, err := a.openVpnStack(ctx, input)
-	if err != nil {
-		return err
-	}
-	w := &heartbeatWriter{ctx: ctx}
-	_, err = stack.Preview(ctx, optpreview.ProgressStreams(w))
-	return err
+// --- per-resource activity types ---
+
+type CreateVpnSecurityGroupInput struct {
+	StackName string            `json:"stackName"` // e.g. "main-vpn-sg"
+	OpsVpcId  string            `json:"opsVpcId"`
+	ExtraTags map[string]string `json:"extraTags,omitempty"`
+}
+type CreateVpnSecurityGroupOutput struct {
+	SgId string `json:"sgId"`
 }
 
-func (a *InfraActivities) UpVpn(ctx context.Context, input VpnInput) (VpnOutputs, error) {
-	stack, err := a.openVpnStack(ctx, input)
-	if err != nil {
-		return VpnOutputs{}, err
-	}
-	w := &heartbeatWriter{ctx: ctx}
-	result, err := stack.Up(ctx, optup.ProgressStreams(w))
-	if err != nil {
-		return VpnOutputs{}, err
-	}
-	return VpnOutputs{
-		EndpointId: fmt.Sprintf("%v", result.Outputs["endpointId"].Value),
-	}, nil
+type CreateVpnEndpointInput struct {
+	StackName     string            `json:"stackName"` // e.g. "main-vpn-endpoint"
+	ServerCertArn string            `json:"serverCertArn"`
+	ClientCaArn   string            `json:"clientCaArn"`
+	ClientCidr    string            `json:"clientCidr"`
+	OpsVpcId      string            `json:"opsVpcId"`
+	SgId          string            `json:"sgId"`
+	ExtraTags     map[string]string `json:"extraTags,omitempty"`
+}
+type CreateVpnEndpointOutput struct {
+	EndpointId string `json:"endpointId"`
 }
 
-func (a *InfraActivities) openVpnStack(ctx context.Context, input VpnInput) (auto.Stack, error) {
-	program := vpnProgram(input)
-	stack, err := auto.UpsertStackInlineSource(ctx, "main-vpn", a.ProjectName, program)
-	if err != nil {
-		return auto.Stack{}, err
-	}
-	if err := a.configureStack(ctx, stack); err != nil {
-		return auto.Stack{}, err
-	}
-	return stack, nil
+type CreateVpnNetworkAssociationInput struct {
+	StackName          string            `json:"stackName"` // e.g. "main-vpn-assoc"
+	EndpointId         string            `json:"endpointId"`
+	OpsPrivateSubnetId string            `json:"opsPrivateSubnetId"`
+	ExtraTags          map[string]string `json:"extraTags,omitempty"`
 }
 
-// vpnProgram returns an inline Pulumi program that creates the AWS Client VPN
-// endpoint in the ops VPC. Routing to qa/prod is handled by the TGW stack;
-// this program only manages the VPN endpoint itself and its associations.
-func vpnProgram(input VpnInput) pulumi.RunFunc {
-	return func(ctx *pulumi.Context) error {
+type CreateVpnAuthorizationRuleInput struct {
+	StackName  string            `json:"stackName"` // e.g. "main-vpn-auth"
+	EndpointId string            `json:"endpointId"`
+	ExtraTags  map[string]string `json:"extraTags,omitempty"`
+}
+
+type CreateVpnRoutesInput struct {
+	StackName          string            `json:"stackName"` // e.g. "main-vpn-routes"
+	EndpointId         string            `json:"endpointId"`
+	OpsPrivateSubnetId string            `json:"opsPrivateSubnetId"`
+	SpokeVpcCidrs      []string          `json:"spokeVpcCidrs"`
+	ExtraTags          map[string]string `json:"extraTags,omitempty"`
+}
+
+// --- activity implementations ---
+
+func (a *InfraActivities) CreateVpnSecurityGroup(ctx context.Context, input CreateVpnSecurityGroupInput) (CreateVpnSecurityGroupOutput, error) {
+	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
 		tags := pulumi.StringMap{"ManagedBy": pulumi.String("Pulumi")}
-
-		sg, err := ec2.NewSecurityGroup(ctx, "vpn-sg", &ec2.SecurityGroupArgs{
+		for k, v := range input.ExtraTags {
+			tags[k] = pulumi.String(v)
+		}
+		sg, err := ec2.NewSecurityGroup(pctx, "vpn-sg", &ec2.SecurityGroupArgs{
 			VpcId:       pulumi.String(input.OpsVpcId),
 			Description: pulumi.String("Client VPN endpoint"),
 			Egress: ec2.SecurityGroupEgressArray{
@@ -80,18 +89,32 @@ func vpnProgram(input VpnInput) pulumi.RunFunc {
 					CidrBlocks: pulumi.StringArray{pulumi.String("0.0.0.0/0")},
 				},
 			},
-			Tags: mergeTags(tags, pulumi.StringMap{"Name": pulumi.String("main-vpn-sg")}),
+			Tags: mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(input.StackName)}),
 		})
 		if err != nil {
 			return err
 		}
+		pctx.Export("sgId", sg.ID())
+		return nil
+	})
+	if err != nil {
+		return CreateVpnSecurityGroupOutput{}, err
+	}
+	return CreateVpnSecurityGroupOutput{SgId: fmt.Sprintf("%v", result.Outputs["sgId"].Value)}, nil
+}
 
-		endpoint, err := ec2clientvpn.NewEndpoint(ctx, "vpn-endpoint", &ec2clientvpn.EndpointArgs{
+func (a *InfraActivities) CreateVpnEndpoint(ctx context.Context, input CreateVpnEndpointInput) (CreateVpnEndpointOutput, error) {
+	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
+		tags := pulumi.StringMap{"ManagedBy": pulumi.String("Pulumi")}
+		for k, v := range input.ExtraTags {
+			tags[k] = pulumi.String(v)
+		}
+		endpoint, err := ec2clientvpn.NewEndpoint(pctx, "vpn-endpoint", &ec2clientvpn.EndpointArgs{
 			ServerCertificateArn: pulumi.String(input.ServerCertArn),
 			ClientCidrBlock:      pulumi.String(input.ClientCidr),
 			SplitTunnel:          pulumi.Bool(true),
 			VpcId:                pulumi.String(input.OpsVpcId),
-			SecurityGroupIds:     pulumi.StringArray{sg.ID().ToStringOutput()},
+			SecurityGroupIds:     pulumi.StringArray{pulumi.String(input.SgId)},
 			AuthenticationOptions: ec2clientvpn.EndpointAuthenticationOptionArray{
 				&ec2clientvpn.EndpointAuthenticationOptionArgs{
 					Type:                    pulumi.String("certificate-authentication"),
@@ -101,44 +124,61 @@ func vpnProgram(input VpnInput) pulumi.RunFunc {
 			ConnectionLogOptions: &ec2clientvpn.EndpointConnectionLogOptionsArgs{
 				Enabled: pulumi.Bool(false),
 			},
-			Tags: mergeTags(tags, pulumi.StringMap{"Name": pulumi.String("main-vpn")}),
+			Tags: mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(input.StackName)}),
 		})
 		if err != nil {
 			return err
 		}
+		pctx.Export("endpointId", endpoint.ID())
+		return nil
+	})
+	if err != nil {
+		return CreateVpnEndpointOutput{}, err
+	}
+	return CreateVpnEndpointOutput{EndpointId: fmt.Sprintf("%v", result.Outputs["endpointId"].Value)}, nil
+}
 
-		// Associate with the first ops private subnet. This auto-creates a local
-		// Client VPN route for the ops VPC CIDR (10.0.0.0/16).
-		assoc, err := ec2clientvpn.NewNetworkAssociation(ctx, "vpn-assoc", &ec2clientvpn.NetworkAssociationArgs{
-			ClientVpnEndpointId: endpoint.ID(),
+// CreateVpnNetworkAssociation associates the endpoint with the ops private subnet.
+// This must complete before authorization rules and routes are created.
+func (a *InfraActivities) CreateVpnNetworkAssociation(ctx context.Context, input CreateVpnNetworkAssociationInput) error {
+	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
+		_, err := ec2clientvpn.NewNetworkAssociation(pctx, "vpn-assoc", &ec2clientvpn.NetworkAssociationArgs{
+			ClientVpnEndpointId: pulumi.String(input.EndpointId),
 			SubnetId:            pulumi.String(input.OpsPrivateSubnetId),
 		})
-		if err != nil {
-			return err
-		}
+		return err
+	})
+	return err
+}
 
-		// Allow all VPN clients to reach the full 10.0.0.0/8 range (all three VPCs).
-		if _, err = ec2clientvpn.NewAuthorizationRule(ctx, "vpn-auth-all", &ec2clientvpn.AuthorizationRuleArgs{
-			ClientVpnEndpointId: endpoint.ID(),
+// CreateVpnAuthorizationRule allows all VPN clients to reach the full 10.0.0.0/8 range.
+func (a *InfraActivities) CreateVpnAuthorizationRule(ctx context.Context, input CreateVpnAuthorizationRuleInput) error {
+	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
+		_, err := ec2clientvpn.NewAuthorizationRule(pctx, "vpn-auth-all", &ec2clientvpn.AuthorizationRuleArgs{
+			ClientVpnEndpointId: pulumi.String(input.EndpointId),
 			TargetNetworkCidr:   pulumi.String("10.0.0.0/8"),
 			AuthorizeAllGroups:  pulumi.Bool(true),
-		}, pulumi.DependsOn([]pulumi.Resource{assoc})); err != nil {
-			return err
-		}
+		})
+		return err
+	})
+	return err
+}
 
-		// Explicit Client VPN routes for spoke VPCs. Traffic exits through the ops
-		// subnet and is forwarded to the TGW via the ops private route table.
+// CreateVpnRoutes adds explicit Client VPN routes for each spoke VPC CIDR.
+// Traffic exits through the ops subnet and is forwarded to the TGW.
+func (a *InfraActivities) CreateVpnRoutes(ctx context.Context, input CreateVpnRoutesInput) error {
+	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
 		for i, cidr := range input.SpokeVpcCidrs {
-			if _, err = ec2clientvpn.NewRoute(ctx, fmt.Sprintf("vpn-route-%d", i), &ec2clientvpn.RouteArgs{
-				ClientVpnEndpointId:  endpoint.ID(),
+			_, err := ec2clientvpn.NewRoute(pctx, fmt.Sprintf("vpn-route-%d", i), &ec2clientvpn.RouteArgs{
+				ClientVpnEndpointId:  pulumi.String(input.EndpointId),
 				DestinationCidrBlock: pulumi.String(cidr),
 				TargetVpcSubnetId:    pulumi.String(input.OpsPrivateSubnetId),
-			}, pulumi.DependsOn([]pulumi.Resource{assoc})); err != nil {
+			})
+			if err != nil {
 				return err
 			}
 		}
-
-		ctx.Export("endpointId", endpoint.ID())
 		return nil
-	}
+	})
+	return err
 }

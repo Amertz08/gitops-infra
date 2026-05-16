@@ -137,6 +137,7 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 	status.Phase = "vpn"
 	opsVpc := vpcByEnv["ops"]
 	vpnInput := activities.VpnInput{
+		StackName:          "main-vpn",
 		ServerCertArn:      input.ServerCertArn,
 		ClientCaArn:        input.ClientCaArn,
 		OpsVpcId:           opsVpc.VpcId,
