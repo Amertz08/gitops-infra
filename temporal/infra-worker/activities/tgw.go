@@ -33,11 +33,11 @@ type CreateTransitGatewayOutput struct {
 	TgwId string `json:"tgwId"`
 }
 
-type CreateVpcAttachmentsInput struct {
-	StackName   string            `json:"stackName"` // e.g. "main-tgw-attachments"
+type CreateVpcAttachmentInput struct {
+	StackName   string            `json:"stackName"`
 	Environment string            `json:"environment"`
 	TgwId       string            `json:"tgwId"`
-	Vpcs        []VpcOutputs      `json:"vpcs"` // hub at index 0, spokes at 1+
+	Vpc         VpcOutputs        `json:"vpc"`
 	ExtraTags   map[string]string `json:"extraTags,omitempty"`
 }
 
@@ -64,27 +64,22 @@ func (a *InfraActivities) CreateTransitGateway(ctx context.Context, input Create
 	return CreateTransitGatewayOutput{TgwId: fmt.Sprintf("%v", result.Outputs["tgwId"].Value)}, nil
 }
 
-// CreateVpcAttachments attaches each VPC to the Transit Gateway via its private subnets.
-// Attachments must be established before routes are added; TgwWorkflow sequences these.
-func (a *InfraActivities) CreateVpcAttachments(ctx context.Context, input CreateVpcAttachmentsInput) error {
+// CreateVpcAttachment attaches a single VPC to the Transit Gateway via its private subnets.
+// All attachments must be established before routes are added; TgwWorkflow sequences these.
+func (a *InfraActivities) CreateVpcAttachment(ctx context.Context, input CreateVpcAttachmentInput) error {
 	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
 		tags := envTags(input.Environment, input.ExtraTags)
-		for i, vpc := range input.Vpcs {
-			subnetIds := make(pulumi.StringArray, len(vpc.PrivateSubnetIds))
-			for j, id := range vpc.PrivateSubnetIds {
-				subnetIds[j] = pulumi.String(id)
-			}
-			_, err := ec2transitgateway.NewVpcAttachment(pctx, fmt.Sprintf("attach-%d", i), &ec2transitgateway.VpcAttachmentArgs{
-				TransitGatewayId: pulumi.String(input.TgwId),
-				VpcId:            pulumi.String(vpc.VpcId),
-				SubnetIds:        subnetIds,
-				Tags:             mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(fmt.Sprintf("%s-attach-%d", input.StackName, i))}),
-			})
-			if err != nil {
-				return err
-			}
+		subnetIds := make(pulumi.StringArray, len(input.Vpc.PrivateSubnetIds))
+		for i, id := range input.Vpc.PrivateSubnetIds {
+			subnetIds[i] = pulumi.String(id)
 		}
-		return nil
+		_, err := ec2transitgateway.NewVpcAttachment(pctx, "attach", &ec2transitgateway.VpcAttachmentArgs{
+			TransitGatewayId: pulumi.String(input.TgwId),
+			VpcId:            pulumi.String(input.Vpc.VpcId),
+			SubnetIds:        subnetIds,
+			Tags:             mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(input.StackName)}),
+		})
+		return err
 	})
 	return err
 }

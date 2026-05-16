@@ -12,8 +12,8 @@ import (
 // TgwWorkflow connects all VPCs via a Transit Gateway:
 //
 //	Step 1: CreateTransitGateway
-//	Step 2: CreateVpcAttachments  (needs TGW)
-//	Step 3: AddTgwRoutes          (needs attachments established)
+//	Step 2: CreateVpcAttachment×N  (needs TGW; all in parallel, must finish before routes)
+//	Step 3: AddRoute×N             (needs attachments established)
 func TgwWorkflow(ctx workflow.Context, input activities.TgwInput) (activities.TgwOutputs, error) {
 	var acts *activities.InfraActivities
 
@@ -41,15 +41,21 @@ func TgwWorkflow(ctx workflow.Context, input activities.TgwInput) (activities.Tg
 
 	allVpcs := append([]activities.VpcOutputs{input.HubVpc}, input.SpokeVpcs...)
 
-	// Step 2: Attach all VPCs — must complete before routes are programmed.
-	if err := workflow.ExecuteActivity(longCtx, acts.CreateVpcAttachments, activities.CreateVpcAttachmentsInput{
-		StackName:   input.StackName + "-attachments",
-		Environment: input.Environment,
-		TgwId:       tgwOut.TgwId,
-		Vpcs:        allVpcs,
-		ExtraTags:   input.ExtraTags,
-	}).Get(ctx, nil); err != nil {
-		return activities.TgwOutputs{}, err
+	// Step 2: Attach all VPCs in parallel — must all complete before routes are programmed.
+	var attachFutures []workflow.Future
+	for i, vpc := range allVpcs {
+		attachFutures = append(attachFutures, workflow.ExecuteActivity(longCtx, acts.CreateVpcAttachment, activities.CreateVpcAttachmentInput{
+			StackName:   fmt.Sprintf("%s-attach-%d", input.StackName, i),
+			Environment: input.Environment,
+			TgwId:       tgwOut.TgwId,
+			Vpc:         vpc,
+			ExtraTags:   input.ExtraTags,
+		}))
+	}
+	for _, f := range attachFutures {
+		if err := f.Get(ctx, nil); err != nil {
+			return activities.TgwOutputs{}, err
+		}
 	}
 
 	// Step 3: Cross-VPC routes and VPN return routes — one AddRoute activity per route
