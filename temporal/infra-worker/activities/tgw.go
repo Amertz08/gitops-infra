@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2transitgateway"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
@@ -42,12 +41,6 @@ type CreateVpcAttachmentsInput struct {
 	ExtraTags   map[string]string `json:"extraTags,omitempty"`
 }
 
-type AddTgwRoutesInput struct {
-	StackName     string       `json:"stackName"` // e.g. "main-tgw-routes"
-	TgwId         string       `json:"tgwId"`
-	Vpcs          []VpcOutputs `json:"vpcs"` // hub at index 0, spokes at 1+; each must have CidrBlock set
-	VpnClientCidr string       `json:"vpnClientCidr"`
-}
 
 // --- activity implementations ---
 
@@ -96,42 +89,3 @@ func (a *InfraActivities) CreateVpcAttachments(ctx context.Context, input Create
 	return err
 }
 
-// AddTgwRoutes programs cross-VPC routes and VPN return routes in each VPC's private
-// route tables. Each VpcOutputs in Vpcs must have CidrBlock set. Index 0 is the hub
-// (no VPN return route needed); indices 1+ are spokes.
-func (a *InfraActivities) AddTgwRoutes(ctx context.Context, input AddTgwRoutesInput) error {
-	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		for i, vpc := range input.Vpcs {
-			isHub := i == 0
-			for rtIdx, rtId := range vpc.PrivateRouteTableIds {
-				// Cross-VPC routes: one route per destination VPC.
-				for j, dest := range input.Vpcs {
-					if i == j || dest.CidrBlock == "" {
-						continue
-					}
-					routeName := fmt.Sprintf("vpc%d-rt%d-to-vpc%d", i, rtIdx, j)
-					if _, err := ec2.NewRoute(pctx, routeName, &ec2.RouteArgs{
-						RouteTableId:         pulumi.String(rtId),
-						DestinationCidrBlock: pulumi.String(dest.CidrBlock),
-						TransitGatewayId:     pulumi.String(input.TgwId),
-					}); err != nil {
-						return err
-					}
-				}
-				// Spoke VPCs need a return route for VPN client traffic.
-				if !isHub && input.VpnClientCidr != "" {
-					routeName := fmt.Sprintf("vpc%d-rt%d-vpn-return", i, rtIdx)
-					if _, err := ec2.NewRoute(pctx, routeName, &ec2.RouteArgs{
-						RouteTableId:         pulumi.String(rtId),
-						DestinationCidrBlock: pulumi.String(input.VpnClientCidr),
-						TransitGatewayId:     pulumi.String(input.TgwId),
-					}); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	})
-	return err
-}

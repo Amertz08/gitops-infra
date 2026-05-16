@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/adammertz/gitops-infra/temporal/infra-worker/activities"
@@ -51,14 +52,39 @@ func TgwWorkflow(ctx workflow.Context, input activities.TgwInput) (activities.Tg
 		return activities.TgwOutputs{}, err
 	}
 
-	// Step 3: Cross-VPC routes and VPN return routes in private route tables.
-	if err := workflow.ExecuteActivity(shortCtx, acts.AddTgwRoutes, activities.AddTgwRoutesInput{
-		StackName:     input.StackName + "-routes",
-		TgwId:         tgwOut.TgwId,
-		Vpcs:          allVpcs,
-		VpnClientCidr: input.VpnClientCidr,
-	}).Get(ctx, nil); err != nil {
-		return activities.TgwOutputs{}, err
+	// Step 3: Cross-VPC routes and VPN return routes — one AddRoutes activity per route
+	// table, all in parallel. The workflow owns which routes go in each table.
+	var rtFutures []workflow.Future
+	for i, vpc := range allVpcs {
+		for rtIdx, rtId := range vpc.PrivateRouteTableIds {
+			var routes []activities.RouteSpec
+			for j, dest := range allVpcs {
+				if i == j || dest.CidrBlock == "" {
+					continue
+				}
+				routes = append(routes, activities.RouteSpec{
+					DestCidr:         dest.CidrBlock,
+					TransitGatewayId: tgwOut.TgwId,
+				})
+			}
+			// Spoke VPCs (index > 0) need a return route for VPN client traffic.
+			if i > 0 && input.VpnClientCidr != "" {
+				routes = append(routes, activities.RouteSpec{
+					DestCidr:         input.VpnClientCidr,
+					TransitGatewayId: tgwOut.TgwId,
+				})
+			}
+			rtFutures = append(rtFutures, workflow.ExecuteActivity(shortCtx, acts.AddRoutes, activities.AddRoutesInput{
+				StackName:    fmt.Sprintf("%s-routes-vpc%d-rt%d", input.StackName, i, rtIdx),
+				RouteTableId: rtId,
+				Routes:       routes,
+			}))
+		}
+	}
+	for _, f := range rtFutures {
+		if err := f.Get(ctx, nil); err != nil {
+			return activities.TgwOutputs{}, err
+		}
 	}
 
 	return activities.TgwOutputs{TgwId: tgwOut.TgwId}, nil

@@ -248,3 +248,34 @@ func (a *InfraActivities) CreateRouteTable(ctx context.Context, input CreateRout
 	return CreateRouteTableOutput{RouteTableId: fmt.Sprintf("%v", result.Outputs["routeTableId"].Value)}, nil
 }
 
+type AddRoutesInput struct {
+	StackName    string      `json:"stackName"`
+	RouteTableId string      `json:"routeTableId"`
+	Routes       []RouteSpec `json:"routes"`
+}
+
+func (a *InfraActivities) AddRoutes(ctx context.Context, input AddRoutesInput) error {
+	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
+		for i, spec := range input.Routes {
+			args := &ec2.RouteArgs{
+				RouteTableId:         pulumi.String(input.RouteTableId),
+				DestinationCidrBlock: pulumi.String(spec.DestCidr),
+			}
+			if spec.GatewayId != "" {
+				args.GatewayId = pulumi.String(spec.GatewayId)
+			}
+			if spec.NatGatewayId != "" {
+				args.NatGatewayId = pulumi.String(spec.NatGatewayId)
+			}
+			if spec.TransitGatewayId != "" {
+				args.TransitGatewayId = pulumi.String(spec.TransitGatewayId)
+			}
+			if _, err := ec2.NewRoute(pctx, fmt.Sprintf("route-%d", i), args); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return err
+}
+
