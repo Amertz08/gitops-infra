@@ -12,6 +12,7 @@ import (
 // TgwInput is the top-level input for TgwWorkflow.
 type TgwInput struct {
 	StackName     string            `json:"stackName"`     // e.g. "main-tgw"
+	Environment   string            `json:"environment"`   // e.g. "shared"
 	HubVpc        VpcOutputs        `json:"hubVpc"`        // ops — VPN endpoint lives here
 	SpokeVpcs     []VpcOutputs      `json:"spokeVpcs"`     // qa, prod
 	VpnClientCidr string            `json:"vpnClientCidr"` // e.g. "172.16.0.0/22"
@@ -25,36 +26,34 @@ type TgwOutputs struct {
 // --- per-resource activity types ---
 
 type CreateTransitGatewayInput struct {
-	StackName string            `json:"stackName"` // e.g. "main-tgw"
-	ExtraTags map[string]string `json:"extraTags,omitempty"`
+	StackName   string            `json:"stackName"` // e.g. "main-tgw"
+	Environment string            `json:"environment"`
+	ExtraTags   map[string]string `json:"extraTags,omitempty"`
 }
 type CreateTransitGatewayOutput struct {
 	TgwId string `json:"tgwId"`
 }
 
 type CreateVpcAttachmentsInput struct {
-	StackName string            `json:"stackName"` // e.g. "main-tgw-attachments"
-	TgwId     string            `json:"tgwId"`
-	Vpcs      []VpcOutputs      `json:"vpcs"` // hub at index 0, spokes at 1+
-	ExtraTags map[string]string `json:"extraTags,omitempty"`
+	StackName   string            `json:"stackName"` // e.g. "main-tgw-attachments"
+	Environment string            `json:"environment"`
+	TgwId       string            `json:"tgwId"`
+	Vpcs        []VpcOutputs      `json:"vpcs"` // hub at index 0, spokes at 1+
+	ExtraTags   map[string]string `json:"extraTags,omitempty"`
 }
 
 type AddTgwRoutesInput struct {
-	StackName     string            `json:"stackName"` // e.g. "main-tgw-routes"
-	TgwId         string            `json:"tgwId"`
-	Vpcs          []VpcOutputs      `json:"vpcs"` // hub at index 0, spokes at 1+; each must have CidrBlock set
-	VpnClientCidr string            `json:"vpnClientCidr"`
-	ExtraTags     map[string]string `json:"extraTags,omitempty"`
+	StackName     string       `json:"stackName"` // e.g. "main-tgw-routes"
+	TgwId         string       `json:"tgwId"`
+	Vpcs          []VpcOutputs `json:"vpcs"` // hub at index 0, spokes at 1+; each must have CidrBlock set
+	VpnClientCidr string       `json:"vpnClientCidr"`
 }
 
 // --- activity implementations ---
 
 func (a *InfraActivities) CreateTransitGateway(ctx context.Context, input CreateTransitGatewayInput) (CreateTransitGatewayOutput, error) {
 	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		tags := pulumi.StringMap{"ManagedBy": pulumi.String("Pulumi")}
-		for k, v := range input.ExtraTags {
-			tags[k] = pulumi.String(v)
-		}
+		tags := envTags(input.Environment, input.ExtraTags)
 		tgw, err := ec2transitgateway.NewTransitGateway(pctx, "tgw", &ec2transitgateway.TransitGatewayArgs{
 			DefaultRouteTableAssociation: pulumi.String("enable"),
 			DefaultRouteTablePropagation: pulumi.String("enable"),
@@ -76,10 +75,7 @@ func (a *InfraActivities) CreateTransitGateway(ctx context.Context, input Create
 // Attachments must be established before routes are added; TgwWorkflow sequences these.
 func (a *InfraActivities) CreateVpcAttachments(ctx context.Context, input CreateVpcAttachmentsInput) error {
 	_, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		tags := pulumi.StringMap{"ManagedBy": pulumi.String("Pulumi")}
-		for k, v := range input.ExtraTags {
-			tags[k] = pulumi.String(v)
-		}
+		tags := envTags(input.Environment, input.ExtraTags)
 		for i, vpc := range input.Vpcs {
 			subnetIds := make(pulumi.StringArray, len(vpc.PrivateSubnetIds))
 			for j, id := range vpc.PrivateSubnetIds {

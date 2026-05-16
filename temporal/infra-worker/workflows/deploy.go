@@ -132,6 +132,7 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 	status.Phase = "tgw"
 	tgwInput := activities.TgwInput{
 		StackName:     "main-tgw",
+		Environment:   "shared",
 		HubVpc:        vpcByEnv["ops"],
 		SpokeVpcs:     []activities.VpcOutputs{vpcByEnv["qa"], vpcByEnv["prod"]},
 		VpnClientCidr: vpnClientCidr,

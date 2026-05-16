@@ -31,8 +31,9 @@ func TgwWorkflow(ctx workflow.Context, input activities.TgwInput) (activities.Tg
 	// Step 1: Transit Gateway
 	var tgwOut activities.CreateTransitGatewayOutput
 	if err := workflow.ExecuteActivity(longCtx, acts.CreateTransitGateway, activities.CreateTransitGatewayInput{
-		StackName: input.StackName,
-		ExtraTags: input.ExtraTags,
+		StackName:   input.StackName,
+		Environment: input.Environment,
+		ExtraTags:   input.ExtraTags,
 	}).Get(ctx, &tgwOut); err != nil {
 		return activities.TgwOutputs{}, err
 	}
@@ -41,10 +42,11 @@ func TgwWorkflow(ctx workflow.Context, input activities.TgwInput) (activities.Tg
 
 	// Step 2: Attach all VPCs — must complete before routes are programmed.
 	if err := workflow.ExecuteActivity(longCtx, acts.CreateVpcAttachments, activities.CreateVpcAttachmentsInput{
-		StackName: input.StackName + "-attachments",
-		TgwId:     tgwOut.TgwId,
-		Vpcs:      allVpcs,
-		ExtraTags: input.ExtraTags,
+		StackName:   input.StackName + "-attachments",
+		Environment: input.Environment,
+		TgwId:       tgwOut.TgwId,
+		Vpcs:        allVpcs,
+		ExtraTags:   input.ExtraTags,
 	}).Get(ctx, nil); err != nil {
 		return activities.TgwOutputs{}, err
 	}
@@ -55,7 +57,6 @@ func TgwWorkflow(ctx workflow.Context, input activities.TgwInput) (activities.Tg
 		TgwId:         tgwOut.TgwId,
 		Vpcs:          allVpcs,
 		VpnClientCidr: input.VpnClientCidr,
-		ExtraTags:     input.ExtraTags,
 	}).Get(ctx, nil); err != nil {
 		return activities.TgwOutputs{}, err
 	}
