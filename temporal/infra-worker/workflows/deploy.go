@@ -6,6 +6,8 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+const vpnClientCidr = "172.16.0.0/22"
+
 // InfraInput is the top-level input for a full infrastructure deployment.
 type InfraInput struct {
 	Region        string `json:"region"`        // e.g. "us-east-1"
@@ -89,7 +91,7 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 	// Fan-out: run all three VPC child workflows concurrently.
 	ch := workflow.NewChannel(ctx)
 	cwo := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 1},
+		RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 2},
 	})
 	for _, cfg := range vpcConfigs {
 		cfg := cfg
@@ -104,18 +106,26 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 		})
 	}
 
-	// Fan-in: collect all three VPC results before proceeding.
+	// Fan-in: collect all three VPC results before proceeding. Drain the full channel
+	// even on error so all coroutines can exit cleanly before the workflow returns.
 	vpcByEnv := make(map[string]activities.VpcOutputs, len(vpcConfigs))
+	var firstVpcErr string
 	for range vpcConfigs {
 		var r vpcChannelResult
 		ch.Receive(ctx, &r)
 		if r.ErrMsg != "" {
-			status.Phase = "failed"
-			return InfraOutputs{}, temporal.NewApplicationError(r.ErrMsg, "VpcDeployError")
+			if firstVpcErr == "" {
+				firstVpcErr = r.ErrMsg
+			}
+			continue
 		}
 		vpcByEnv[r.Env] = r.Outputs
 		status.VpcReady[r.Env] = true
 		logger.Info("VPC ready", "env", r.Env, "vpcId", r.Outputs.VpcId)
+	}
+	if firstVpcErr != "" {
+		status.Phase = "failed"
+		return InfraOutputs{}, temporal.NewApplicationError(firstVpcErr, "VpcDeployError")
 	}
 
 	// Transit Gateway — sequential after all VPCs.
@@ -124,7 +134,7 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 		StackName:     "main-tgw",
 		HubVpc:        vpcByEnv["ops"],
 		SpokeVpcs:     []activities.VpcOutputs{vpcByEnv["qa"], vpcByEnv["prod"]},
-		VpnClientCidr: "172.16.0.0/22",
+		VpnClientCidr: vpnClientCidr,
 	}
 	var tgwOut activities.TgwOutputs
 	if err := workflow.ExecuteChildWorkflow(cwo, TgwWorkflow, tgwInput).Get(ctx, &tgwOut); err != nil {
@@ -136,6 +146,10 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 	// Client VPN — sequential after Transit Gateway.
 	status.Phase = "vpn"
 	opsVpc := vpcByEnv["ops"]
+	if len(opsVpc.PrivateSubnetIds) == 0 {
+		status.Phase = "failed"
+		return InfraOutputs{}, temporal.NewApplicationError("ops VPC has no private subnets", "ConfigError")
+	}
 	vpnInput := activities.VpnInput{
 		StackName:          "main-vpn",
 		ServerCertArn:      input.ServerCertArn,
@@ -143,7 +157,7 @@ func InfraDeployWorkflow(ctx workflow.Context, input InfraInput) (InfraOutputs, 
 		OpsVpcId:           opsVpc.VpcId,
 		OpsPrivateSubnetId: opsVpc.PrivateSubnetIds[0],
 		SpokeVpcCidrs:      []string{vpcByEnv["qa"].CidrBlock, vpcByEnv["prod"].CidrBlock},
-		ClientCidr:         "172.16.0.0/22",
+		ClientCidr:         vpnClientCidr,
 	}
 	var vpnOut activities.VpnOutputs
 	if err := workflow.ExecuteChildWorkflow(cwo, VpnWorkflow, vpnInput).Get(ctx, &vpnOut); err != nil {

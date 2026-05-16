@@ -79,7 +79,8 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 		return activities.VpcOutputs{}, err
 	}
 
-	// Step 3: NAT Gateways — needs IGW ID (to ensure IGW exists) and public subnet IDs.
+	// Step 3: NAT Gateways — IGW and public subnets must exist first; sequencing is
+	// enforced by the .Get() calls above, not by passing the IGW ID explicitly.
 	var natOut activities.CreateNatGatewaysOutput
 	if err := workflow.ExecuteActivity(longCtx, acts.CreateNatGateways, activities.CreateNatGatewaysInput{
 		StackName:       input.StackName + "-nat",
