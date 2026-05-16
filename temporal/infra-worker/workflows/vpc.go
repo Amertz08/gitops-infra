@@ -40,52 +40,64 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 	}
 
 	// Step 2: IGW, public subnets, and private subnets in parallel.
-	// All three only need VpcId from step 1; none depend on each other.
+	// All only need VpcId from step 1; none depend on each other.
 	igwFuture := workflow.ExecuteActivity(shortCtx, acts.CreateIgw, activities.CreateIgwInput{
 		StackName:   input.StackName + "-igw",
 		Environment: input.Environment,
 		VpcId:       vpcOut.VpcId,
 		ExtraTags:   input.ExtraTags,
 	})
-	pubFuture := workflow.ExecuteActivity(shortCtx, acts.CreateSubnets, activities.CreateSubnetsInput{
-		StackName:           input.StackName + "-public-subnets",
-		Environment:         input.Environment,
-		VpcId:               vpcOut.VpcId,
-		SubnetCidrs:         input.PublicSubnetCidrs,
-		Azs:                 input.Azs,
-		NamePrefix:          input.Environment + "-public",
-		MapPublicIpOnLaunch: false,
-		ExtraTags:           input.ExtraTags,
-	})
-	privFuture := workflow.ExecuteActivity(shortCtx, acts.CreateSubnets, activities.CreateSubnetsInput{
-		StackName:           input.StackName + "-private-subnets",
-		Environment:         input.Environment,
-		VpcId:               vpcOut.VpcId,
-		SubnetCidrs:         input.PrivateSubnetCidrs,
-		Azs:                 input.Azs,
-		NamePrefix:          input.Environment + "-private",
-		MapPublicIpOnLaunch: false,
-		ExtraTags:           input.ExtraTags,
-	})
+	pubFutures := make([]workflow.Future, len(input.PublicSubnetCidrs))
+	for i, cidr := range input.PublicSubnetCidrs {
+		pubFutures[i] = workflow.ExecuteActivity(shortCtx, acts.CreateSubnet, activities.CreateSubnetInput{
+			StackName:   fmt.Sprintf("%s-public-subnet-%d", input.StackName, i),
+			Environment: input.Environment,
+			VpcId:       vpcOut.VpcId,
+			CidrBlock:   cidr,
+			Az:          input.Azs[i],
+			Name:        fmt.Sprintf("%s-public-%d", input.Environment, i),
+			ExtraTags:   input.ExtraTags,
+		})
+	}
+	privFutures := make([]workflow.Future, len(input.PrivateSubnetCidrs))
+	for i, cidr := range input.PrivateSubnetCidrs {
+		privFutures[i] = workflow.ExecuteActivity(shortCtx, acts.CreateSubnet, activities.CreateSubnetInput{
+			StackName:   fmt.Sprintf("%s-private-subnet-%d", input.StackName, i),
+			Environment: input.Environment,
+			VpcId:       vpcOut.VpcId,
+			CidrBlock:   cidr,
+			Az:          input.Azs[i],
+			Name:        fmt.Sprintf("%s-private-%d", input.Environment, i),
+			ExtraTags:   input.ExtraTags,
+		})
+	}
 
 	var igwOut activities.CreateIgwOutput
 	if err := igwFuture.Get(ctx, &igwOut); err != nil {
 		return activities.VpcOutputs{}, err
 	}
-	var pubOut activities.CreateSubnetsOutput
-	if err := pubFuture.Get(ctx, &pubOut); err != nil {
-		return activities.VpcOutputs{}, err
+	pubSubnetIds := make([]string, len(pubFutures))
+	for i, f := range pubFutures {
+		var out activities.CreateSubnetOutput
+		if err := f.Get(ctx, &out); err != nil {
+			return activities.VpcOutputs{}, err
+		}
+		pubSubnetIds[i] = out.SubnetId
 	}
-	var privOut activities.CreateSubnetsOutput
-	if err := privFuture.Get(ctx, &privOut); err != nil {
-		return activities.VpcOutputs{}, err
+	privSubnetIds := make([]string, len(privFutures))
+	for i, f := range privFutures {
+		var out activities.CreateSubnetOutput
+		if err := f.Get(ctx, &out); err != nil {
+			return activities.VpcOutputs{}, err
+		}
+		privSubnetIds[i] = out.SubnetId
 	}
 
 	// Step 3: NAT Gateways — IGW and public subnets must exist first; sequencing is
 	// enforced by the .Get() calls above. NatPerAz controls how many are provisioned.
-	subnetsForNat := pubOut.SubnetIds
+	subnetsForNat := pubSubnetIds
 	if !input.NatPerAz {
-		subnetsForNat = pubOut.SubnetIds[:1]
+		subnetsForNat = pubSubnetIds[:1]
 	}
 	natFutures := make([]workflow.Future, len(subnetsForNat))
 	for i, subnetId := range subnetsForNat {
@@ -107,8 +119,8 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 
 	// Step 4: Route tables — one per private subnet + one shared public RT, all in parallel
 	// as child workflows. RouteTableWorkflow owns the create→route→associate sequence.
-	privRtFutures := make([]workflow.Future, len(privOut.SubnetIds))
-	for i, subnetId := range privOut.SubnetIds {
+	privRtFutures := make([]workflow.Future, len(privSubnetIds))
+	for i, subnetId := range privSubnetIds {
 		privRtFutures[i] = workflow.ExecuteChildWorkflow(cwo, RouteTableWorkflow, activities.RouteTableInput{
 			StackName:   fmt.Sprintf("%s-private-rt-%d", input.StackName, i),
 			Environment: input.Environment,
@@ -124,7 +136,7 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 		Environment: input.Environment,
 		VpcId:       vpcOut.VpcId,
 		Name:        input.Environment + "-public-rt",
-		SubnetIds:   pubOut.SubnetIds,
+		SubnetIds:   pubSubnetIds,
 		Routes:      []activities.RouteSpec{{DestCidr: "0.0.0.0/0", GatewayId: igwOut.IgwId}},
 		ExtraTags:   input.ExtraTags,
 	})
@@ -144,8 +156,8 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 	return activities.VpcOutputs{
 		VpcId:                vpcOut.VpcId,
 		CidrBlock:            input.CidrBlock,
-		PublicSubnetIds:      pubOut.SubnetIds,
-		PrivateSubnetIds:     privOut.SubnetIds,
+		PublicSubnetIds:      pubSubnetIds,
+		PrivateSubnetIds:     privSubnetIds,
 		PrivateRouteTableIds: privRtIds,
 	}, nil
 }

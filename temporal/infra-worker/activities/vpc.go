@@ -52,18 +52,18 @@ type CreateIgwOutput struct {
 	IgwId string `json:"igwId"`
 }
 
-type CreateSubnetsInput struct {
+type CreateSubnetInput struct {
 	StackName           string            `json:"stackName"`
 	Environment         string            `json:"environment"`
 	VpcId               string            `json:"vpcId"`
-	SubnetCidrs         []string          `json:"subnetCidrs"`
-	Azs                 []string          `json:"azs"`
-	NamePrefix          string            `json:"namePrefix"`
+	CidrBlock           string            `json:"cidrBlock"`
+	Az                  string            `json:"az"`
+	Name                string            `json:"name"`
 	MapPublicIpOnLaunch bool              `json:"mapPublicIpOnLaunch"`
 	ExtraTags           map[string]string `json:"extraTags,omitempty"`
 }
-type CreateSubnetsOutput struct {
-	SubnetIds []string `json:"subnetIds"`
+type CreateSubnetOutput struct {
+	SubnetId string `json:"subnetId"`
 }
 
 type CreateEipInput struct {
@@ -180,30 +180,26 @@ func (a *InfraActivities) CreateIgw(ctx context.Context, input CreateIgwInput) (
 	return CreateIgwOutput{IgwId: fmt.Sprintf("%v", result.Outputs["igwId"].Value)}, nil
 }
 
-func (a *InfraActivities) CreateSubnets(ctx context.Context, input CreateSubnetsInput) (CreateSubnetsOutput, error) {
+func (a *InfraActivities) CreateSubnet(ctx context.Context, input CreateSubnetInput) (CreateSubnetOutput, error) {
 	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
 		tags := envTags(input.Environment, input.ExtraTags)
-		ids := make(pulumi.StringArray, len(input.SubnetCidrs))
-		for i, cidr := range input.SubnetCidrs {
-			sub, err := ec2.NewSubnet(pctx, fmt.Sprintf("subnet-%d", i), &ec2.SubnetArgs{
-				VpcId:               pulumi.String(input.VpcId),
-				CidrBlock:           pulumi.String(cidr),
-				AvailabilityZone:    pulumi.String(input.Azs[i]),
-				MapPublicIpOnLaunch: pulumi.Bool(input.MapPublicIpOnLaunch),
-				Tags:                mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(fmt.Sprintf("%s-%d", input.NamePrefix, i))}),
-			})
-			if err != nil {
-				return err
-			}
-			ids[i] = sub.ID().ToStringOutput()
+		sub, err := ec2.NewSubnet(pctx, "subnet", &ec2.SubnetArgs{
+			VpcId:               pulumi.String(input.VpcId),
+			CidrBlock:           pulumi.String(input.CidrBlock),
+			AvailabilityZone:    pulumi.String(input.Az),
+			MapPublicIpOnLaunch: pulumi.Bool(input.MapPublicIpOnLaunch),
+			Tags:                mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(input.Name)}),
+		})
+		if err != nil {
+			return err
 		}
-		pctx.Export("subnetIds", ids)
+		pctx.Export("subnetId", sub.ID())
 		return nil
 	})
 	if err != nil {
-		return CreateSubnetsOutput{}, err
+		return CreateSubnetOutput{}, err
 	}
-	return CreateSubnetsOutput{SubnetIds: extractStringSlice(result.Outputs["subnetIds"])}, nil
+	return CreateSubnetOutput{SubnetId: fmt.Sprintf("%v", result.Outputs["subnetId"].Value)}, nil
 }
 
 func (a *InfraActivities) CreateEip(ctx context.Context, input CreateEipInput) (CreateEipOutput, error) {
