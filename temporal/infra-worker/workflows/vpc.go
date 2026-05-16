@@ -50,32 +50,36 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 		VpcId:       vpcOut.VpcId,
 		ExtraTags:   input.ExtraTags,
 	})
-	pubFuture := workflow.ExecuteActivity(shortCtx, acts.CreatePublicSubnets, activities.CreatePublicSubnetsInput{
-		StackName:   input.StackName + "-public-subnets",
-		Environment: input.Environment,
-		VpcId:       vpcOut.VpcId,
-		SubnetCidrs: input.PublicSubnetCidrs,
-		Azs:         input.Azs,
-		ExtraTags:   input.ExtraTags,
+	pubFuture := workflow.ExecuteActivity(shortCtx, acts.CreateSubnets, activities.CreateSubnetsInput{
+		StackName:           input.StackName + "-public-subnets",
+		Environment:         input.Environment,
+		VpcId:               vpcOut.VpcId,
+		SubnetCidrs:         input.PublicSubnetCidrs,
+		Azs:                 input.Azs,
+		NamePrefix:          input.Environment + "-public",
+		MapPublicIpOnLaunch: false,
+		ExtraTags:           input.ExtraTags,
 	})
-	privFuture := workflow.ExecuteActivity(shortCtx, acts.CreatePrivateSubnets, activities.CreatePrivateSubnetsInput{
-		StackName:   input.StackName + "-private-subnets",
-		Environment: input.Environment,
-		VpcId:       vpcOut.VpcId,
-		SubnetCidrs: input.PrivateSubnetCidrs,
-		Azs:         input.Azs,
-		ExtraTags:   input.ExtraTags,
+	privFuture := workflow.ExecuteActivity(shortCtx, acts.CreateSubnets, activities.CreateSubnetsInput{
+		StackName:           input.StackName + "-private-subnets",
+		Environment:         input.Environment,
+		VpcId:               vpcOut.VpcId,
+		SubnetCidrs:         input.PrivateSubnetCidrs,
+		Azs:                 input.Azs,
+		NamePrefix:          input.Environment + "-private",
+		MapPublicIpOnLaunch: false,
+		ExtraTags:           input.ExtraTags,
 	})
 
 	var igwOut activities.CreateIgwOutput
 	if err := igwFuture.Get(ctx, &igwOut); err != nil {
 		return activities.VpcOutputs{}, err
 	}
-	var pubOut activities.CreatePublicSubnetsOutput
+	var pubOut activities.CreateSubnetsOutput
 	if err := pubFuture.Get(ctx, &pubOut); err != nil {
 		return activities.VpcOutputs{}, err
 	}
-	var privOut activities.CreatePrivateSubnetsOutput
+	var privOut activities.CreateSubnetsOutput
 	if err := privFuture.Get(ctx, &privOut); err != nil {
 		return activities.VpcOutputs{}, err
 	}

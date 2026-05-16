@@ -52,15 +52,17 @@ type CreateIgwOutput struct {
 	IgwId string `json:"igwId"`
 }
 
-type CreatePublicSubnetsInput struct {
-	StackName   string            `json:"stackName"`
-	Environment string            `json:"environment"`
-	VpcId       string            `json:"vpcId"`
-	SubnetCidrs []string          `json:"subnetCidrs"`
-	Azs         []string          `json:"azs"`
-	ExtraTags   map[string]string `json:"extraTags,omitempty"`
+type CreateSubnetsInput struct {
+	StackName           string            `json:"stackName"`
+	Environment         string            `json:"environment"`
+	VpcId               string            `json:"vpcId"`
+	SubnetCidrs         []string          `json:"subnetCidrs"`
+	Azs                 []string          `json:"azs"`
+	NamePrefix          string            `json:"namePrefix"`
+	MapPublicIpOnLaunch bool              `json:"mapPublicIpOnLaunch"`
+	ExtraTags           map[string]string `json:"extraTags,omitempty"`
 }
-type CreatePublicSubnetsOutput struct {
+type CreateSubnetsOutput struct {
 	SubnetIds []string `json:"subnetIds"`
 }
 
@@ -75,17 +77,6 @@ type CreateNatGatewaysOutput struct {
 	NatGwIds []string `json:"natGwIds"`
 }
 
-type CreatePrivateSubnetsInput struct {
-	StackName   string            `json:"stackName"`
-	Environment string            `json:"environment"`
-	VpcId       string            `json:"vpcId"`
-	SubnetCidrs []string          `json:"subnetCidrs"`
-	Azs         []string          `json:"azs"`
-	ExtraTags   map[string]string `json:"extraTags,omitempty"`
-}
-type CreatePrivateSubnetsOutput struct {
-	SubnetIds []string `json:"subnetIds"`
-}
 
 // RouteSpec describes a single route entry: exactly one of GatewayId,
 // NatGatewayId, or TransitGatewayId should be set.
@@ -151,21 +142,17 @@ func (a *InfraActivities) CreateIgw(ctx context.Context, input CreateIgwInput) (
 	return CreateIgwOutput{IgwId: fmt.Sprintf("%v", result.Outputs["igwId"].Value)}, nil
 }
 
-func (a *InfraActivities) CreatePublicSubnets(ctx context.Context, input CreatePublicSubnetsInput) (CreatePublicSubnetsOutput, error) {
+func (a *InfraActivities) CreateSubnets(ctx context.Context, input CreateSubnetsInput) (CreateSubnetsOutput, error) {
 	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
 		tags := envTags(input.Environment, input.ExtraTags)
 		ids := make(pulumi.StringArray, len(input.SubnetCidrs))
 		for i, cidr := range input.SubnetCidrs {
-			az := input.Azs[0]
-			if i < len(input.Azs) {
-				az = input.Azs[i]
-			}
-			sub, err := ec2.NewSubnet(pctx, fmt.Sprintf("public-%d", i), &ec2.SubnetArgs{
+			sub, err := ec2.NewSubnet(pctx, fmt.Sprintf("subnet-%d", i), &ec2.SubnetArgs{
 				VpcId:               pulumi.String(input.VpcId),
 				CidrBlock:           pulumi.String(cidr),
-				AvailabilityZone:    pulumi.String(az),
-				MapPublicIpOnLaunch: pulumi.Bool(false),
-				Tags:                mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(fmt.Sprintf("%s-public-%d", input.Environment, i))}),
+				AvailabilityZone:    pulumi.String(input.Azs[i]),
+				MapPublicIpOnLaunch: pulumi.Bool(input.MapPublicIpOnLaunch),
+				Tags:                mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(fmt.Sprintf("%s-%d", input.NamePrefix, i))}),
 			})
 			if err != nil {
 				return err
@@ -176,9 +163,9 @@ func (a *InfraActivities) CreatePublicSubnets(ctx context.Context, input CreateP
 		return nil
 	})
 	if err != nil {
-		return CreatePublicSubnetsOutput{}, err
+		return CreateSubnetsOutput{}, err
 	}
-	return CreatePublicSubnetsOutput{SubnetIds: extractStringSlice(result.Outputs["subnetIds"])}, nil
+	return CreateSubnetsOutput{SubnetIds: extractStringSlice(result.Outputs["subnetIds"])}, nil
 }
 
 func (a *InfraActivities) CreateNatGateways(ctx context.Context, input CreateNatGatewaysInput) (CreateNatGatewaysOutput, error) {
@@ -215,30 +202,6 @@ func (a *InfraActivities) CreateNatGateways(ctx context.Context, input CreateNat
 	return CreateNatGatewaysOutput{NatGwIds: extractStringSlice(result.Outputs["natGwIds"])}, nil
 }
 
-func (a *InfraActivities) CreatePrivateSubnets(ctx context.Context, input CreatePrivateSubnetsInput) (CreatePrivateSubnetsOutput, error) {
-	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
-		tags := envTags(input.Environment, input.ExtraTags)
-		ids := make(pulumi.StringArray, len(input.SubnetCidrs))
-		for i, cidr := range input.SubnetCidrs {
-			sub, err := ec2.NewSubnet(pctx, fmt.Sprintf("private-%d", i), &ec2.SubnetArgs{
-				VpcId:            pulumi.String(input.VpcId),
-				CidrBlock:        pulumi.String(cidr),
-				AvailabilityZone: pulumi.String(input.Azs[i]),
-				Tags:             mergeTags(tags, pulumi.StringMap{"Name": pulumi.String(fmt.Sprintf("%s-private-%d", input.Environment, i))}),
-			})
-			if err != nil {
-				return err
-			}
-			ids[i] = sub.ID().ToStringOutput()
-		}
-		pctx.Export("subnetIds", ids)
-		return nil
-	})
-	if err != nil {
-		return CreatePrivateSubnetsOutput{}, err
-	}
-	return CreatePrivateSubnetsOutput{SubnetIds: extractStringSlice(result.Outputs["subnetIds"])}, nil
-}
 
 func (a *InfraActivities) CreateRouteTable(ctx context.Context, input CreateRouteTableInput) (CreateRouteTableOutput, error) {
 	result, err := a.upStack(ctx, input.StackName, func(pctx *pulumi.Context) error {
