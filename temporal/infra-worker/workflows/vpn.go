@@ -17,15 +17,21 @@ import (
 func VpnWorkflow(ctx workflow.Context, input activities.VpnInput) (activities.VpnOutputs, error) {
 	var acts *activities.InfraActivities
 
-	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 15 * time.Minute,
+	shortCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 5 * time.Minute,
+		HeartbeatTimeout:    2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
+	// VPN endpoint and network association involve AWS wait periods of 5-10 min.
+	longCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 20 * time.Minute,
 		HeartbeatTimeout:    2 * time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	})
 
 	// Step 1: Security Group
 	var sgOut activities.CreateVpnSecurityGroupOutput
-	if err := workflow.ExecuteActivity(actCtx, acts.CreateVpnSecurityGroup, activities.CreateVpnSecurityGroupInput{
+	if err := workflow.ExecuteActivity(shortCtx, acts.CreateVpnSecurityGroup, activities.CreateVpnSecurityGroupInput{
 		StackName: input.StackName + "-sg",
 		OpsVpcId:  input.OpsVpcId,
 		ExtraTags: input.ExtraTags,
@@ -35,7 +41,7 @@ func VpnWorkflow(ctx workflow.Context, input activities.VpnInput) (activities.Vp
 
 	// Step 2: Endpoint
 	var endpointOut activities.CreateVpnEndpointOutput
-	if err := workflow.ExecuteActivity(actCtx, acts.CreateVpnEndpoint, activities.CreateVpnEndpointInput{
+	if err := workflow.ExecuteActivity(longCtx, acts.CreateVpnEndpoint, activities.CreateVpnEndpointInput{
 		StackName:     input.StackName + "-endpoint",
 		ServerCertArn: input.ServerCertArn,
 		ClientCaArn:   input.ClientCaArn,
@@ -48,7 +54,7 @@ func VpnWorkflow(ctx workflow.Context, input activities.VpnInput) (activities.Vp
 	}
 
 	// Step 3: Network association — must be established before auth rules and routes.
-	if err := workflow.ExecuteActivity(actCtx, acts.CreateVpnNetworkAssociation, activities.CreateVpnNetworkAssociationInput{
+	if err := workflow.ExecuteActivity(longCtx, acts.CreateVpnNetworkAssociation, activities.CreateVpnNetworkAssociationInput{
 		StackName:          input.StackName + "-assoc",
 		EndpointId:         endpointOut.EndpointId,
 		OpsPrivateSubnetId: input.OpsPrivateSubnetId,
@@ -58,12 +64,12 @@ func VpnWorkflow(ctx workflow.Context, input activities.VpnInput) (activities.Vp
 	}
 
 	// Step 4: Authorization rule and spoke routes in parallel.
-	authFuture := workflow.ExecuteActivity(actCtx, acts.CreateVpnAuthorizationRule, activities.CreateVpnAuthorizationRuleInput{
+	authFuture := workflow.ExecuteActivity(shortCtx, acts.CreateVpnAuthorizationRule, activities.CreateVpnAuthorizationRuleInput{
 		StackName:  input.StackName + "-auth",
 		EndpointId: endpointOut.EndpointId,
 		ExtraTags:  input.ExtraTags,
 	})
-	routesFuture := workflow.ExecuteActivity(actCtx, acts.CreateVpnRoutes, activities.CreateVpnRoutesInput{
+	routesFuture := workflow.ExecuteActivity(shortCtx, acts.CreateVpnRoutes, activities.CreateVpnRoutesInput{
 		StackName:          input.StackName + "-routes",
 		EndpointId:         endpointOut.EndpointId,
 		OpsPrivateSubnetId: input.OpsPrivateSubnetId,

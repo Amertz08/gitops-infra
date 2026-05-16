@@ -18,15 +18,21 @@ import (
 func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.VpcOutputs, error) {
 	var acts *activities.InfraActivities
 
-	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 15 * time.Minute,
+	shortCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 5 * time.Minute,
+		HeartbeatTimeout:    2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
+	// NAT Gateway provisioning can take ~5 min in AWS; use a longer close timeout.
+	longCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 20 * time.Minute,
 		HeartbeatTimeout:    2 * time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	})
 
 	// Step 1: VPC
 	var vpcOut activities.CreateVpcOutput
-	if err := workflow.ExecuteActivity(actCtx, acts.CreateVpc, activities.CreateVpcInput{
+	if err := workflow.ExecuteActivity(shortCtx, acts.CreateVpc, activities.CreateVpcInput{
 		StackName:   input.StackName,
 		Environment: input.Environment,
 		CidrBlock:   input.CidrBlock,
@@ -37,13 +43,13 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 
 	// Step 2: IGW, public subnets, and private subnets in parallel.
 	// All three only need VpcId from step 1; none depend on each other.
-	igwFuture := workflow.ExecuteActivity(actCtx, acts.CreateIgw, activities.CreateIgwInput{
+	igwFuture := workflow.ExecuteActivity(shortCtx, acts.CreateIgw, activities.CreateIgwInput{
 		StackName:   input.StackName + "-igw",
 		Environment: input.Environment,
 		VpcId:       vpcOut.VpcId,
 		ExtraTags:   input.ExtraTags,
 	})
-	pubFuture := workflow.ExecuteActivity(actCtx, acts.CreatePublicSubnets, activities.CreatePublicSubnetsInput{
+	pubFuture := workflow.ExecuteActivity(shortCtx, acts.CreatePublicSubnets, activities.CreatePublicSubnetsInput{
 		StackName:   input.StackName + "-public-subnets",
 		Environment: input.Environment,
 		VpcId:       vpcOut.VpcId,
@@ -51,7 +57,7 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 		Azs:         input.Azs,
 		ExtraTags:   input.ExtraTags,
 	})
-	privFuture := workflow.ExecuteActivity(actCtx, acts.CreatePrivateSubnets, activities.CreatePrivateSubnetsInput{
+	privFuture := workflow.ExecuteActivity(shortCtx, acts.CreatePrivateSubnets, activities.CreatePrivateSubnetsInput{
 		StackName:   input.StackName + "-private-subnets",
 		Environment: input.Environment,
 		VpcId:       vpcOut.VpcId,
@@ -75,7 +81,7 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 
 	// Step 3: NAT Gateways — needs IGW ID (to ensure IGW exists) and public subnet IDs.
 	var natOut activities.CreateNatGatewaysOutput
-	if err := workflow.ExecuteActivity(actCtx, acts.CreateNatGateways, activities.CreateNatGatewaysInput{
+	if err := workflow.ExecuteActivity(longCtx, acts.CreateNatGateways, activities.CreateNatGatewaysInput{
 		StackName:       input.StackName + "-nat",
 		Environment:     input.Environment,
 		PublicSubnetIds: pubOut.SubnetIds,
@@ -86,7 +92,7 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 	}
 
 	// Step 4: Public and private route tables in parallel.
-	pubRtFuture := workflow.ExecuteActivity(actCtx, acts.CreatePublicRouteTable, activities.CreatePublicRouteTableInput{
+	pubRtFuture := workflow.ExecuteActivity(shortCtx, acts.CreatePublicRouteTable, activities.CreatePublicRouteTableInput{
 		StackName:       input.StackName + "-public-rt",
 		Environment:     input.Environment,
 		VpcId:           vpcOut.VpcId,
@@ -94,7 +100,7 @@ func VpcWorkflow(ctx workflow.Context, input activities.VpcInput) (activities.Vp
 		PublicSubnetIds: pubOut.SubnetIds,
 		ExtraTags:       input.ExtraTags,
 	})
-	privRtFuture := workflow.ExecuteActivity(actCtx, acts.CreatePrivateRouteTables, activities.CreatePrivateRouteTablesInput{
+	privRtFuture := workflow.ExecuteActivity(shortCtx, acts.CreatePrivateRouteTables, activities.CreatePrivateRouteTablesInput{
 		StackName:        input.StackName + "-private-rts",
 		Environment:      input.Environment,
 		VpcId:            vpcOut.VpcId,
