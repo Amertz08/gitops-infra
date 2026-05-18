@@ -1,0 +1,17 @@
+config:
+  aws:region: us-east-1
+  networking:availabilityZones:
+    - us-east-1a
+    - us-east-1b
+  networking:vpcCidr: 10.2.0.0/16
+  networking:publicSubnetCidrs:
+    - 10.2.128.0/24
+    - 10.2.129.0/24
+  networking:privateSubnetCidrs:
+    - 10.2.0.0/20
+    - 10.2.16.0/20
+  networking:eksInstanceType: m5.xlarge
+  networking:eksNodeCount: 3
+  # Fully-qualified Pulumi stack name for the ops stack (used for TGW cross-reference).
+  # Format: <org>/networking/ops  (verify org name with: pulumi whoami)
+  networking:opsStackRef: org/networking/ops
