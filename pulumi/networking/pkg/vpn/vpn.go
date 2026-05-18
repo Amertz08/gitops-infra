@@ -12,8 +12,6 @@ type Args struct {
 	Env              string
 	VpcId            pulumi.StringInput
 	PrivateSubnetIds pulumi.StringArrayInput
-	// ServerCertArn and ClientCaArn come from pulumi config secrets.
-	// Use cfg.RequireSecret(...) in main.go and pass the resulting Output here.
 	ServerCertArn  pulumi.StringInput
 	ClientCaArn    pulumi.StringInput
 	ClientCidr     string // CIDR assigned to VPN clients, e.g. "172.16.0.0/22"

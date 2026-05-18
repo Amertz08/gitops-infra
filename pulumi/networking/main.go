@@ -3,13 +3,13 @@ package main
 import (
 	"fmt"
 
+	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/certs"
 	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/eks"
 	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/tgw"
 	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/vpc"
 	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/vpn"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
-	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
 )
 
 type stackCfg struct {
@@ -83,8 +83,6 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 	}
 	opts := []pulumi.ResourceOption{pulumi.Provider(awsProvider)}
 
-	cfg := config.New(ctx, "networking")
-
 	vpcOut, err := vpc.New(ctx, vpc.Args{
 		Env:                "ops",
 		CidrBlock:          c.VpcCidr,
@@ -125,12 +123,17 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 		return err
 	}
 
+	certsOut, err := certs.New(ctx, "ops", opts...)
+	if err != nil {
+		return err
+	}
+
 	vpnOut, err := vpn.New(ctx, vpn.Args{
 		Env:              "ops",
 		VpcId:            vpcOut.VpcId,
 		PrivateSubnetIds: vpcOut.PrivateSubnetIds,
-		ServerCertArn:    cfg.RequireSecret("vpnServerCertArn"),
-		ClientCaArn:      cfg.RequireSecret("vpnClientCaArn"),
+		ServerCertArn:    certsOut.ServerCertArn,
+		ClientCaArn:      certsOut.ClientCaArn,
 		ClientCidr:       c.VpnClientCidr,
 		AuthorizedCidr:   "10.0.0.0/8",
 		SpokeVpcCidrs:    []string{configs["qa"].VpcCidr, configs["prod"].VpcCidr},
