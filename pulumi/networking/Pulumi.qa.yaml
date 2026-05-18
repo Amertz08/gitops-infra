@@ -1,0 +1,15 @@
+config:
+  aws:region: us-east-1
+  networking:availabilityZones:
+    - us-east-1a
+    - us-east-1b
+  networking:vpcCidr: 10.1.0.0/16
+  networking:publicSubnetCidrs:
+    - 10.1.128.0/24
+    - 10.1.129.0/24
+  networking:privateSubnetCidrs:
+    - 10.1.0.0/20
+    - 10.1.16.0/20
+  networking:eksInstanceType: m5.large
+  networking:eksNodeCount: 2
+  networking:opsStackRef: Amertz08/networking/ops

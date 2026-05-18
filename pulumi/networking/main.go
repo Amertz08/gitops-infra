@@ -8,88 +8,38 @@ import (
 	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/tgw"
 	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/vpc"
 	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/vpn"
-	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
+	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
 )
-
-type stackCfg struct {
-	Region             string
-	VpcCidr            string
-	AvailabilityZones  []string
-	PublicSubnetCidrs  []string
-	PrivateSubnetCidrs []string
-	EksInstanceType    string
-	EksNodeCount       int
-	VpnClientCidr      string // ops only
-	OpsStackRef        string // spoke stacks only — format: <org>/networking/ops
-}
-
-var configs = map[string]stackCfg{
-	"ops": {
-		Region:             "us-east-1",
-		VpcCidr:            "10.0.0.0/16",
-		AvailabilityZones:  []string{"us-east-1a", "us-east-1b"},
-		PublicSubnetCidrs:  []string{"10.0.128.0/24", "10.0.129.0/24"},
-		PrivateSubnetCidrs: []string{"10.0.0.0/20", "10.0.16.0/20"},
-		EksInstanceType:    "m5.large",
-		EksNodeCount:       3,
-		VpnClientCidr:      "172.16.0.0/22",
-	},
-	"qa": {
-		Region:             "us-east-1",
-		VpcCidr:            "10.1.0.0/16",
-		AvailabilityZones:  []string{"us-east-1a", "us-east-1b"},
-		PublicSubnetCidrs:  []string{"10.1.128.0/24", "10.1.129.0/24"},
-		PrivateSubnetCidrs: []string{"10.1.0.0/20", "10.1.16.0/20"},
-		EksInstanceType:    "m5.large",
-		EksNodeCount:       2,
-		OpsStackRef:        "Amertz08/networking/ops",
-	},
-	"prod": {
-		Region:             "us-east-1",
-		VpcCidr:            "10.2.0.0/16",
-		AvailabilityZones:  []string{"us-east-1a", "us-east-1b"},
-		PublicSubnetCidrs:  []string{"10.2.128.0/24", "10.2.129.0/24"},
-		PrivateSubnetCidrs: []string{"10.2.0.0/20", "10.2.16.0/20"},
-		EksInstanceType:    "m5.xlarge",
-		EksNodeCount:       3,
-		OpsStackRef:        "Amertz08/networking/ops",
-	},
-}
 
 func main() {
 	pulumi.Run(func(ctx *pulumi.Context) error {
-		c, ok := configs[ctx.Stack()]
-		if !ok {
-			return fmt.Errorf("no config defined for stack %q", ctx.Stack())
-		}
 		switch ctx.Stack() {
 		case "ops":
-			return deployOps(ctx, c)
+			return deployOps(ctx)
 		case "qa", "prod":
-			return deploySpoke(ctx, c)
+			return deploySpoke(ctx)
 		default:
 			return fmt.Errorf("unknown stack: %s", ctx.Stack())
 		}
 	})
 }
 
-func deployOps(ctx *pulumi.Context, c stackCfg) error {
-	awsProvider, err := aws.NewProvider(ctx, "aws", &aws.ProviderArgs{
-		Region: pulumi.String(c.Region),
-	})
-	if err != nil {
-		return err
-	}
-	opts := []pulumi.ResourceOption{pulumi.Provider(awsProvider)}
+func deployOps(ctx *pulumi.Context) error {
+	cfg := config.New(ctx, "networking")
+
+	var azs, publicCidrs, privateCidrs []string
+	cfg.RequireObject("availabilityZones", &azs)
+	cfg.RequireObject("publicSubnetCidrs", &publicCidrs)
+	cfg.RequireObject("privateSubnetCidrs", &privateCidrs)
 
 	vpcOut, err := vpc.New(ctx, vpc.Args{
 		Env:                "ops",
-		CidrBlock:          c.VpcCidr,
-		AvailabilityZones:  c.AvailabilityZones,
-		PublicSubnetCidrs:  c.PublicSubnetCidrs,
-		PrivateSubnetCidrs: c.PrivateSubnetCidrs,
-	}, opts...)
+		CidrBlock:          cfg.Require("vpcCidr"),
+		AvailabilityZones:  azs,
+		PublicSubnetCidrs:  publicCidrs,
+		PrivateSubnetCidrs: privateCidrs,
+	})
 	if err != nil {
 		return err
 	}
@@ -98,15 +48,15 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 		Env:              "ops",
 		VpcId:            vpcOut.VpcId,
 		PrivateSubnetIds: vpcOut.PrivateSubnetIds,
-		InstanceType:     c.EksInstanceType,
-		NodeCount:        c.EksNodeCount,
+		InstanceType:     cfg.Require("eksInstanceType"),
+		NodeCount:        cfg.RequireInt("eksNodeCount"),
 		PublicEndpoint:   true,
-	}, opts...)
+	})
 	if err != nil {
 		return err
 	}
 
-	tgwOut, err := tgw.NewTransitGateway(ctx, "ops", opts...)
+	tgwOut, err := tgw.NewTransitGateway(ctx, "ops")
 	if err != nil {
 		return err
 	}
@@ -117,13 +67,13 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 		VpcId:                vpcOut.VpcId,
 		PrivateSubnetIds:     vpcOut.PrivateSubnetIds,
 		PrivateRouteTableIds: vpcOut.PrivateRouteTableIds,
-		DestinationCidrs:     []string{configs["qa"].VpcCidr, configs["prod"].VpcCidr},
-	}, opts...)
+		DestinationCidrs:     []string{"10.1.0.0/16", "10.2.0.0/16"},
+	})
 	if err != nil {
 		return err
 	}
 
-	certsOut, err := certs.New(ctx, "ops", opts...)
+	certsOut, err := certs.New(ctx, "ops")
 	if err != nil {
 		return err
 	}
@@ -134,16 +84,16 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 		PrivateSubnetIds: vpcOut.PrivateSubnetIds,
 		ServerCertArn:    certsOut.ServerCertArn,
 		ClientCaArn:      certsOut.ClientCaArn,
-		ClientCidr:       c.VpnClientCidr,
+		ClientCidr:       cfg.Require("vpnClientCidr"),
 		AuthorizedCidr:   "10.0.0.0/8",
-		SpokeVpcCidrs:    []string{configs["qa"].VpcCidr, configs["prod"].VpcCidr},
-	}, opts...)
+		SpokeVpcCidrs:    []string{"10.1.0.0/16", "10.2.0.0/16"},
+	})
 	if err != nil {
 		return err
 	}
 
 	ctx.Export("vpcId", vpcOut.VpcId)
-	ctx.Export("vpcCidr", pulumi.String(c.VpcCidr))
+	ctx.Export("vpcCidr", pulumi.String(cfg.Require("vpcCidr")))
 	ctx.Export("publicSubnetIds", vpcOut.PublicSubnetIds)
 	ctx.Export("privateSubnetIds", vpcOut.PrivateSubnetIds)
 	ctx.Export("clusterName", eksOut.ClusterName)
@@ -157,24 +107,22 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 	return nil
 }
 
-func deploySpoke(ctx *pulumi.Context, c stackCfg) error {
+func deploySpoke(ctx *pulumi.Context) error {
 	env := ctx.Stack()
+	cfg := config.New(ctx, "networking")
 
-	awsProvider, err := aws.NewProvider(ctx, "aws", &aws.ProviderArgs{
-		Region: pulumi.String(c.Region),
-	})
-	if err != nil {
-		return err
-	}
-	opts := []pulumi.ResourceOption{pulumi.Provider(awsProvider)}
+	var azs, publicCidrs, privateCidrs []string
+	cfg.RequireObject("availabilityZones", &azs)
+	cfg.RequireObject("publicSubnetCidrs", &publicCidrs)
+	cfg.RequireObject("privateSubnetCidrs", &privateCidrs)
 
 	vpcOut, err := vpc.New(ctx, vpc.Args{
 		Env:                env,
-		CidrBlock:          c.VpcCidr,
-		AvailabilityZones:  c.AvailabilityZones,
-		PublicSubnetCidrs:  c.PublicSubnetCidrs,
-		PrivateSubnetCidrs: c.PrivateSubnetCidrs,
-	}, opts...)
+		CidrBlock:          cfg.Require("vpcCidr"),
+		AvailabilityZones:  azs,
+		PublicSubnetCidrs:  publicCidrs,
+		PrivateSubnetCidrs: privateCidrs,
+	})
 	if err != nil {
 		return err
 	}
@@ -183,16 +131,16 @@ func deploySpoke(ctx *pulumi.Context, c stackCfg) error {
 		Env:              env,
 		VpcId:            vpcOut.VpcId,
 		PrivateSubnetIds: vpcOut.PrivateSubnetIds,
-		InstanceType:     c.EksInstanceType,
-		NodeCount:        c.EksNodeCount,
+		InstanceType:     cfg.Require("eksInstanceType"),
+		NodeCount:        cfg.RequireInt("eksNodeCount"),
 		PublicEndpoint:   false,
-	}, opts...)
+	})
 	if err != nil {
 		return err
 	}
 
 	opsRef, err := pulumi.NewStackReference(ctx, "ops-stack", &pulumi.StackReferenceArgs{
-		Name: pulumi.String(c.OpsStackRef),
+		Name: pulumi.String(cfg.Require("opsStackRef")),
 	})
 	if err != nil {
 		return err
@@ -201,10 +149,9 @@ func deploySpoke(ctx *pulumi.Context, c stackCfg) error {
 	tgwId := opsRef.GetOutput(pulumi.String("transitGatewayId")).
 		ApplyT(func(v interface{}) string { return v.(string) }).(pulumi.StringOutput)
 
-	// Routes: ops VPC + other spoke VPC + VPN client CIDR.
 	destCidrs := map[string][]string{
-		"qa":   {configs["ops"].VpcCidr, configs["prod"].VpcCidr, configs["ops"].VpnClientCidr},
-		"prod": {configs["ops"].VpcCidr, configs["qa"].VpcCidr, configs["ops"].VpnClientCidr},
+		"qa":   {"10.0.0.0/16", "10.2.0.0/16", "172.16.0.0/22"},
+		"prod": {"10.0.0.0/16", "10.1.0.0/16", "172.16.0.0/22"},
 	}
 
 	err = tgw.NewVpcAttachment(ctx, fmt.Sprintf("%s-tgw-attach", env), tgw.VpcAttachmentArgs{
@@ -214,13 +161,13 @@ func deploySpoke(ctx *pulumi.Context, c stackCfg) error {
 		PrivateSubnetIds:     vpcOut.PrivateSubnetIds,
 		PrivateRouteTableIds: vpcOut.PrivateRouteTableIds,
 		DestinationCidrs:     destCidrs[env],
-	}, opts...)
+	})
 	if err != nil {
 		return err
 	}
 
 	ctx.Export("vpcId", vpcOut.VpcId)
-	ctx.Export("vpcCidr", pulumi.String(c.VpcCidr))
+	ctx.Export("vpcCidr", pulumi.String(cfg.Require("vpcCidr")))
 	ctx.Export("publicSubnetIds", vpcOut.PublicSubnetIds)
 	ctx.Export("privateSubnetIds", vpcOut.PrivateSubnetIds)
 	ctx.Export("clusterName", eksOut.ClusterName)
