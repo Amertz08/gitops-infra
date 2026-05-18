@@ -39,7 +39,7 @@ var configs = map[string]stackCfg{
 		PrivateSubnetCidrs: []string{"10.1.0.0/20", "10.1.16.0/20"},
 		EksInstanceType:    "m5.large",
 		EksNodeCount:       2,
-		OpsStackRef:        "org/networking/ops",
+		OpsStackRef:        "Amertz08/networking/ops",
 	},
 	"prod": {
 		VpcCidr:            "10.2.0.0/16",
@@ -48,7 +48,7 @@ var configs = map[string]stackCfg{
 		PrivateSubnetCidrs: []string{"10.2.0.0/20", "10.2.16.0/20"},
 		EksInstanceType:    "m5.xlarge",
 		EksNodeCount:       3,
-		OpsStackRef:        "org/networking/ops",
+		OpsStackRef:        "Amertz08/networking/ops",
 	},
 }
 
@@ -167,8 +167,6 @@ func deploySpoke(ctx *pulumi.Context, c stackCfg) error {
 		return err
 	}
 
-	// OpsStackRef must match your Pulumi org name.
-	// Update configs[env].OpsStackRef above — run `pulumi whoami` to get the org.
 	opsRef, err := pulumi.NewStackReference(ctx, "ops-stack", &pulumi.StackReferenceArgs{
 		Name: pulumi.String(c.OpsStackRef),
 	})
