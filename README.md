@@ -6,6 +6,7 @@ GitOps infrastructure repository. ArgoCD watches this repo and reconciles all ch
 
 | Directory | Purpose |
 |---|---|
+| `pulumi/networking/` | Pulumi Go IaC — VPCs, Transit Gateway, Client VPN, EKS clusters |
 | `argocd/install/` | ArgoCD installation (Kustomize overlay, self-managed) |
 | `argocd/apps/` | ArgoCD Application and ApplicationSet manifests |
 | `argocd/root.yaml` | App of Apps root — auto-registers everything in `argocd/apps/` |
@@ -168,9 +169,45 @@ kubectl -n kube-system get secret \
 # Store outside the cluster and outside this repo
 ```
 
+## Provisioning AWS infrastructure
+
+The underlying AWS resources (VPCs, Transit Gateway, Client VPN, EKS clusters) are managed by the Pulumi project in `pulumi/networking/`. Run this before the cluster bootstrap steps below.
+
+Three stacks — `ops`, `qa`, `prod` — must be deployed in order:
+
+```bash
+cd pulumi/networking
+
+# One-time: set VPN cert ARNs (certs must exist in ACM first)
+pulumi stack select ops
+pulumi config set --secret networking:vpnServerCertArn arn:aws:acm:...
+pulumi config set --secret networking:vpnClientCaArn  arn:aws:acm:...
+
+# Also update networking:opsStackRef in Pulumi.qa.yaml and Pulumi.prod.yaml
+# to match your Pulumi org: <org>/networking/ops  (run: pulumi whoami)
+
+pulumi stack select ops  && pulumi up   # ~25 min — VPN association is slow
+pulumi stack select qa   && pulumi up
+pulumi stack select prod && pulumi up
+```
+
+| Stack | VPC CIDR | EKS cluster | Notes |
+|-------|----------|-------------|-------|
+| ops | 10.0.0.0/16 | mgmt (hosts ArgoCD) | owns TGW + Client VPN |
+| qa | 10.1.0.0/16 | qa | attaches to TGW |
+| prod | 10.2.0.0/16 | prod | attaches to TGW |
+
+Retrieve the mgmt cluster kubeconfig after the ops stack deploys:
+
+```bash
+pulumi stack select ops
+pulumi stack output kubeconfig --show-secrets > ~/.kube/mgmt-config
+export KUBECONFIG=~/.kube/mgmt-config
+```
+
 ## Bootstrap (initial cluster setup)
 
-Run these steps once when setting up a new environment. ArgoCD runs on a dedicated **mgmt cluster** and manages the dev, qa, and prod clusters remotely.
+Run these steps once after the Pulumi stacks are up. ArgoCD runs on the **mgmt cluster** (ops stack) and manages the qa and prod clusters remotely.
 
 > **HA install**: The mgmt cluster should have at least 3 nodes so Redis HA sentinel pods (3 replicas) and server/repo-server pod anti-affinity rules can spread across nodes. Pods will still schedule on fewer nodes but without true failure isolation.
 
@@ -192,7 +229,9 @@ kubectl -n argocd get secret argocd-initial-admin-secret \
 argocd login <ARGOCD_URL>
 
 # 5. Register the app clusters (run once per cluster)
-argocd cluster add <DEV_KUBECONFIG_CONTEXT>  --name dev-cluster
+# Retrieve kubeconfigs from Pulumi stack outputs:
+#   pulumi stack select qa   && pulumi stack output kubeconfig --show-secrets > /tmp/qa-kube
+#   pulumi stack select prod && pulumi stack output kubeconfig --show-secrets > /tmp/prod-kube
 argocd cluster add <QA_KUBECONFIG_CONTEXT>   --name qa-cluster
 argocd cluster add <PROD_KUBECONFIG_CONTEXT> --name prod-cluster
 
@@ -215,7 +254,7 @@ kubectl apply --server-side -k infrastructure/cert-manager/
 kubectl apply -f argocd/root.yaml
 ```
 
-After step 9, ArgoCD manages everything: it deploys Sealed Secrets, Envoy Gateway, and cert-manager to the appropriate clusters automatically, and syncs app workloads to the correct cluster based on their overlay path.
+After step 9, ArgoCD manages everything: it deploys Sealed Secrets, Envoy Gateway, and cert-manager to the appropriate clusters automatically, and syncs app workloads to the qa and prod clusters based on their overlay path.
 
 To keep cluster registrations in Git (so they survive a mgmt cluster rebuild), seal and commit the cluster secrets ArgoCD created:
 
