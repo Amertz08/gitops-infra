@@ -11,6 +11,9 @@ import (
 	"go.temporal.io/sdk/activity"
 )
 
+// TODO: I kinda do not like how we have tons of tiny stacks. I think I should redo this to simply have Temporal
+//		call the stack preview/up parts so the temporal code is not intertwined with it.
+
 // AWSPluginVersion is the Pulumi AWS provider plugin version installed at worker
 // startup. Should match the major version of pulumi-aws/sdk/v6 in go.mod.
 const AWSPluginVersion = "v6.83.3"
