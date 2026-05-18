@@ -5,3 +5,7 @@ metadata:
   namespace: argocd
 data:
   server.insecure: "true"
+  controller.sharding.algorithm: consistent-hashing
+  controller.status.processors: "20"
+  controller.operation.processors: "10"
+  reposerver.parallelism.limit: "0"

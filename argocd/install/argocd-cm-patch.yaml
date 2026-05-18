@@ -12,3 +12,5 @@ data:
     hs = {}
     hs.status = "Healthy"
     return hs
+  timeout.reconciliation: 3m0s
+  timeout.reconciliation.jitter: 60s

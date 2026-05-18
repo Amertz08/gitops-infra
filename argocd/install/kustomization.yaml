@@ -18,3 +18,15 @@ patches:
     target:
       kind: ConfigMap
       name: argocd-cm
+  - path: argocd-server-ha-patch.yaml
+    target:
+      kind: Deployment
+      name: argocd-server
+  - path: argocd-application-controller-ha-patch.yaml
+    target:
+      kind: StatefulSet
+      name: argocd-application-controller
+  - path: argocd-repo-server-ha-patch.yaml
+    target:
+      kind: Deployment
+      name: argocd-repo-server
