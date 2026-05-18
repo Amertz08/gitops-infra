@@ -7,11 +7,13 @@ import (
 	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/tgw"
 	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/vpc"
 	"github.com/adammertz/gitops-infra/pulumi/networking/pkg/vpn"
+	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
 )
 
 type stackCfg struct {
+	Region             string
 	VpcCidr            string
 	AvailabilityZones  []string
 	PublicSubnetCidrs  []string
@@ -24,6 +26,7 @@ type stackCfg struct {
 
 var configs = map[string]stackCfg{
 	"ops": {
+		Region:             "us-east-1",
 		VpcCidr:            "10.0.0.0/16",
 		AvailabilityZones:  []string{"us-east-1a", "us-east-1b"},
 		PublicSubnetCidrs:  []string{"10.0.128.0/24", "10.0.129.0/24"},
@@ -33,6 +36,7 @@ var configs = map[string]stackCfg{
 		VpnClientCidr:      "172.16.0.0/22",
 	},
 	"qa": {
+		Region:             "us-east-1",
 		VpcCidr:            "10.1.0.0/16",
 		AvailabilityZones:  []string{"us-east-1a", "us-east-1b"},
 		PublicSubnetCidrs:  []string{"10.1.128.0/24", "10.1.129.0/24"},
@@ -42,6 +46,7 @@ var configs = map[string]stackCfg{
 		OpsStackRef:        "Amertz08/networking/ops",
 	},
 	"prod": {
+		Region:             "us-east-1",
 		VpcCidr:            "10.2.0.0/16",
 		AvailabilityZones:  []string{"us-east-1a", "us-east-1b"},
 		PublicSubnetCidrs:  []string{"10.2.128.0/24", "10.2.129.0/24"},
@@ -70,6 +75,14 @@ func main() {
 }
 
 func deployOps(ctx *pulumi.Context, c stackCfg) error {
+	awsProvider, err := aws.NewProvider(ctx, "aws", &aws.ProviderArgs{
+		Region: pulumi.String(c.Region),
+	})
+	if err != nil {
+		return err
+	}
+	opts := []pulumi.ResourceOption{pulumi.Provider(awsProvider)}
+
 	cfg := config.New(ctx, "networking")
 
 	vpcOut, err := vpc.New(ctx, vpc.Args{
@@ -78,7 +91,7 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 		AvailabilityZones:  c.AvailabilityZones,
 		PublicSubnetCidrs:  c.PublicSubnetCidrs,
 		PrivateSubnetCidrs: c.PrivateSubnetCidrs,
-	})
+	}, opts...)
 	if err != nil {
 		return err
 	}
@@ -90,12 +103,12 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 		InstanceType:     c.EksInstanceType,
 		NodeCount:        c.EksNodeCount,
 		PublicEndpoint:   true,
-	})
+	}, opts...)
 	if err != nil {
 		return err
 	}
 
-	tgwOut, err := tgw.NewTransitGateway(ctx, "ops")
+	tgwOut, err := tgw.NewTransitGateway(ctx, "ops", opts...)
 	if err != nil {
 		return err
 	}
@@ -107,7 +120,7 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 		PrivateSubnetIds:     vpcOut.PrivateSubnetIds,
 		PrivateRouteTableIds: vpcOut.PrivateRouteTableIds,
 		DestinationCidrs:     []string{configs["qa"].VpcCidr, configs["prod"].VpcCidr},
-	})
+	}, opts...)
 	if err != nil {
 		return err
 	}
@@ -121,7 +134,7 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 		ClientCidr:       c.VpnClientCidr,
 		AuthorizedCidr:   "10.0.0.0/8",
 		SpokeVpcCidrs:    []string{configs["qa"].VpcCidr, configs["prod"].VpcCidr},
-	})
+	}, opts...)
 	if err != nil {
 		return err
 	}
@@ -144,13 +157,21 @@ func deployOps(ctx *pulumi.Context, c stackCfg) error {
 func deploySpoke(ctx *pulumi.Context, c stackCfg) error {
 	env := ctx.Stack()
 
+	awsProvider, err := aws.NewProvider(ctx, "aws", &aws.ProviderArgs{
+		Region: pulumi.String(c.Region),
+	})
+	if err != nil {
+		return err
+	}
+	opts := []pulumi.ResourceOption{pulumi.Provider(awsProvider)}
+
 	vpcOut, err := vpc.New(ctx, vpc.Args{
 		Env:                env,
 		CidrBlock:          c.VpcCidr,
 		AvailabilityZones:  c.AvailabilityZones,
 		PublicSubnetCidrs:  c.PublicSubnetCidrs,
 		PrivateSubnetCidrs: c.PrivateSubnetCidrs,
-	})
+	}, opts...)
 	if err != nil {
 		return err
 	}
@@ -162,7 +183,7 @@ func deploySpoke(ctx *pulumi.Context, c stackCfg) error {
 		InstanceType:     c.EksInstanceType,
 		NodeCount:        c.EksNodeCount,
 		PublicEndpoint:   false,
-	})
+	}, opts...)
 	if err != nil {
 		return err
 	}
@@ -190,7 +211,7 @@ func deploySpoke(ctx *pulumi.Context, c stackCfg) error {
 		PrivateSubnetIds:     vpcOut.PrivateSubnetIds,
 		PrivateRouteTableIds: vpcOut.PrivateRouteTableIds,
 		DestinationCidrs:     destCidrs[env],
-	})
+	}, opts...)
 	if err != nil {
 		return err
 	}
